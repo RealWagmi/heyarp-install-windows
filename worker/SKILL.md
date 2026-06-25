@@ -10,7 +10,7 @@ Use this skill when the user asks to run or repair a HeyARP worker, monitor the 
 ## Prerequisites
 
 ```powershell
-$npmGlobal = Join-Path $HOME '.npm-global\bin'
+$npmGlobal = Join-Path $HOME '.npm-global'
 $env:PATH = "$npmGlobal;$env:PATH"
 heyarp -h *> $null
 heyarp whoami --local *> $null
@@ -20,7 +20,7 @@ heyarp selftest --role worker
 If `heyarp` is missing:
 
 ```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | & 'C:\Program Files\Git\bin\bash.exe'
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
 The worker needs SOL on its settlement wallet for transaction fees and worker stake.

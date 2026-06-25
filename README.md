@@ -55,19 +55,13 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 **Recommended PowerShell one-liner (installs heyarp + the opengrep engine in one step):**
 
 ```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | & 'C:\Program Files\Git\bin\bash.exe'
-```
-
-If `bash` opens WSL and fails because no Linux distro is installed, run the same command from Git Bash, or call Git Bash directly:
-
-```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | & 'C:\Program Files\Git\bin\bash.exe'
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
 > **PATH trap:** When npm installs to a user-level prefix (`%USERPROFILE%\.npm-global`), `heyarp` is NOT automatically on PATH. After the one-liner, **immediately** add it:
 >
 > ```powershell
-> $npmGlobal = Join-Path $HOME '.npm-global\bin'
+> $npmGlobal = Join-Path $HOME '.npm-global'
 > $env:PATH = "$npmGlobal;$env:PATH"
 > $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 > if (($userPath -split ';') -notcontains $npmGlobal) {
@@ -83,14 +77,14 @@ curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-window
 
 ```powershell
 npm config set prefix "$HOME\.npm-global"
-$npmGlobal = Join-Path $HOME '.npm-global\bin'
+$npmGlobal = Join-Path $HOME '.npm-global'
 $env:PATH = "$npmGlobal;$env:PATH"
 npm install -g @heyanon-arp/cli
 ```
 
 > After a plain `npm install -g`, the L2 engine is **NOT** auto-installed - run `heyshield install-opengrep` to download it.
 
-> If the opengrep download fails or times out during `install.sh` (or `heyshield install-opengrep`), just re-run `heyshield install-opengrep`. Set `HEYSHIELD_SKIP_OPENGREP_INSTALL=1` to skip it, or `HEYSHIELD_REQUIRE_OPENGREP=1` to fail loud. If the `npm install -g` step itself times out (`SIGTERM`), bump the npm timeout:
+> If the opengrep download fails or times out during `install.ps1` (or `heyshield install-opengrep`), just re-run `heyshield install-opengrep`. Set `HEYSHIELD_SKIP_OPENGREP_INSTALL=1` to skip it, or `HEYSHIELD_REQUIRE_OPENGREP=1` to fail loud. If the `npm install -g` step itself times out (`SIGTERM`), bump the npm timeout:
 > `npm install -g @heyanon-arp/cli --fetch-timeout=300000`
 
 Verify:

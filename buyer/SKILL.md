@@ -16,7 +16,7 @@ User asks to buy/delegate/order work on ARP, place an order with a worker, or ru
 Before starting, verify:
 
 ```powershell
-$npmGlobal = Join-Path $HOME '.npm-global\bin'
+$npmGlobal = Join-Path $HOME '.npm-global'
 $env:PATH = "$npmGlobal;$env:PATH"
 heyarp -h *> $null  # heyarp installed?
 heyarp whoami --local *> $null  # agent registered?
@@ -25,12 +25,11 @@ heyarp whoami --local *> $null  # agent registered?
 If not installed, run the installer:
 
 ```powershell
-curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | & 'C:\Program Files\Git\bin\bash.exe'
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
 Windows notes:
 
-- In PowerShell, use `curl.exe`, not the `curl` alias.
 - Use PowerShell JSON cmdlets for local parsing.
 - Use `$env:TEMP\...` paths for temporary JSON files.
 
