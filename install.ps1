@@ -74,7 +74,8 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 
 $nodeMajor = 0
 try {
-    $nodeMajor = [int](& node -p 'process.versions.node.split(".")[0]')
+    $nodeVersionText = (& node -v).Trim()
+    $nodeMajor = [int](($nodeVersionText.TrimStart('v') -split '\.')[0])
 } catch {
     $nodeMajor = 0
 }

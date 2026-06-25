@@ -129,9 +129,12 @@ heyarp config set rpcUrl https://api.devnet.solana.com
 
 ```powershell
 $log = Join-Path $env:TEMP 'heyarp-login.txt'
-Start-Process -FilePath 'heyarp' -ArgumentList 'login' -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden
+Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', 'heyarp login' -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden
 Get-Content -LiteralPath $log
 ```
+
+`cmd.exe /c` is intentional. On Windows, npm global commands are often `.cmd`
+shims, and `Start-Process -FilePath 'heyarp'` may not launch them directly.
 
 Then **wait for the user to approve.** Login succeeds only when they approve in their browser, which writes `%USERPROFILE%\.heyarp\credentials.json`. **Poll for that file** - do NOT kill or re-run login while waiting:
 
