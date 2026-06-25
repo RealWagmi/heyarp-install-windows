@@ -121,7 +121,11 @@ $monitorLog = Join-Path $stateRoot 'monitor.log'
 $monitorLock = Join-Path $stateRoot 'monitor.lock'
 
 New-Item -ItemType Directory -Force -Path $stateRoot, $runsRoot, $logsRoot | Out-Null
-New-Item -ItemType File -Force -Path $seenFile, $dispatchedFile, $monitorLog | Out-Null
+foreach ($file in @($seenFile, $dispatchedFile, $monitorLog)) {
+    if (-not (Test-Path -LiteralPath $file)) {
+        New-Item -ItemType File -Path $file | Out-Null
+    }
+}
 
 function Write-MonitorLog {
     param([string]$Message)
@@ -259,7 +263,14 @@ The PowerShell monitor should:
 - For `NEW delegation`, `NEW work_request`, and `STALL`, start or resume a real worker run; the monitor itself must not merely queue the event and stop.
 - Append `delegationId<TAB>epoch` to `dispatched.txt` only after the worker run is started or resumed.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
-- Log each tick to `$HOME\.heyarp-worker\monitor.log`.
+- Never initialize existing state/log files with `New-Item -ItemType File -Force`; on Windows PowerShell it can truncate files. Create files only when missing, e.g. `if (-not (Test-Path -LiteralPath $file)) { New-Item -ItemType File -Path $file | Out-Null }`.
+- Log each tick and every dispatch attempt to `$HOME\.heyarp-worker\monitor.log`.
+- For each delegation, write diagnostic files under `$HOME\.heyarp-worker\logs\`:
+  - `<delegation-id>.dispatch.log` - dispatcher decisions, stale-lock cleanup, child PID, stdout/stderr paths.
+  - `<delegation-id>.runner.log` - runner lifecycle, Codex path, prompt file, heartbeat start/stop, final exit code.
+  - `<delegation-id>.runner.stdout.log` - stdout from the hidden runner PowerShell process.
+  - `<delegation-id>.runner.stderr.log` - stderr from the hidden runner PowerShell process.
+  - `<delegation-id>.final.txt` - final message from `codex exec`, if the worker run reaches Codex.
 
 For Codex Desktop, the cheap Task Scheduler monitor can launch a one-order noninteractive worker with `codex exec` only when actionable work appears. See section 2b/2c for the monitor-side launch and section 3 for what the worker run does.
 
@@ -290,12 +301,15 @@ Remove every line for that delegation ID from `$dispatchedFile` so it stops bein
 ```powershell
 $DEL = '<delegation-id>'
 $dispatchedFile = Join-Path $HOME '.heyarp-worker\dispatched.txt'
-$remaining = Get-Content -LiteralPath $dispatchedFile -ErrorAction SilentlyContinue |
+$remaining = @(Get-Content -LiteralPath $dispatchedFile -ErrorAction SilentlyContinue |
     Where-Object { -not $_.StartsWith("$DEL`t") }
+)
 [System.IO.File]::WriteAllLines($dispatchedFile, [string[]]$remaining, [System.Text.UTF8Encoding]::new($false))
 ```
 
 The relationship is now free - the buyer's NEXT order is a new delegation ID and dispatches normally. A `canceled` order, e.g. the buyer timed out waiting, is just cleaned up here; nothing else to do.
+
+Always wrap the filtered lines in `@(...)`. If the terminal delegation is the only line in `dispatched.txt`, the filter result is empty; without `@(...)`, PowerShell can pass `$null` to `WriteAllLines` and throw `Value cannot be null. Parameter name: contents`.
 
 ### 2b. `STALL` - non-terminal, worker run went silent -> re-dispatch
 
@@ -315,18 +329,46 @@ $workspace = '<workspace>'
 $runner = Join-Path $workspace 'work\arp_worker_run_codex.ps1'
 $stateRoot = Join-Path $HOME '.heyarp-worker'
 $runsRoot = Join-Path $stateRoot 'runs'
+$logsRoot = Join-Path $stateRoot 'logs'
 $lockFile = Join-Path $runsRoot "$delegationId.lock"
 $dispatchedFile = Join-Path $stateRoot 'dispatched.txt'
 $seenFile = Join-Path $stateRoot 'seen.txt'
+$dispatchLog = Join-Path $logsRoot "$delegationId.dispatch.log"
+$stdoutLog = Join-Path $logsRoot "$delegationId.runner.stdout.log"
+$stderrLog = Join-Path $logsRoot "$delegationId.runner.stderr.log"
 
-New-Item -ItemType Directory -Force -Path $runsRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $runsRoot, $logsRoot | Out-Null
 
-if (Test-Path -LiteralPath $lockFile) {
-    Add-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Value "skip duplicate active run for $delegationId"
-    return
+function Write-DispatchLog {
+    param([string]$Message)
+    $entry = "$(Get-Date -Format o) $Message"
+    Add-Content -LiteralPath $dispatchLog -Value $entry
+    Add-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Value $entry
 }
 
-New-Item -ItemType File -Force -Path $lockFile | Out-Null
+if (Test-Path -LiteralPath $lockFile) {
+    $lockText = Get-Content -LiteralPath $lockFile -Raw -ErrorAction SilentlyContinue
+    $activeProcess = Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.CommandLine -and
+        $_.CommandLine -match 'powershell(\.exe)?"?\s+-NoProfile\s+-ExecutionPolicy\s+Bypass\s+-File' -and
+        $_.CommandLine.Contains('work\arp_worker_run_codex.ps1') -and
+        $_.CommandLine.Contains($delegationId)
+    } | Select-Object -First 1
+
+    if ($activeProcess) {
+        Write-DispatchLog "skip duplicate active run for $delegationId pid=$($activeProcess.ProcessId)"
+        return
+    }
+
+    $lockSummary = if ($lockText) { $lockText.Trim() } else { '<empty>' }
+    Write-DispatchLog "removing stale lock for $delegationId; no matching runner process; lock='$lockSummary'"
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+}
+
+if (-not (Test-Path -LiteralPath $runner)) {
+    throw "runner script missing at $runner"
+}
 
 $args = @(
     '-NoProfile',
@@ -334,20 +376,42 @@ $args = @(
     '-File', $runner,
     '-Workspace', $workspace,
     '-RelationshipId', $relationshipId,
-    '-DelegationId', $delegationId,
-    '-SenderDid', $senderDid,
-    '-EventId', $eventId,
-    '-RequestId', $requestId
+    '-DelegationId', $delegationId
 )
+if ($senderDid) { $args += @('-SenderDid', $senderDid) }
+if ($eventId) { $args += @('-EventId', $eventId) }
+if ($requestId) { $args += @('-RequestId', $requestId) }
 
-$process = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru
-if (-not $process -or $process.HasExited) {
+Write-DispatchLog "starting worker run relationship=$relationshipId delegation=$delegationId sender=$senderDid event=$eventId request=$requestId runner=$runner"
+
+try {
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+} catch {
     Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
-    throw "worker run did not start for $delegationId"
+    Write-DispatchLog "Start-Process failed for $delegationId`: $($_.Exception.Message)"
+    throw
+}
+
+if (-not $process) {
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+    throw "worker run did not return a process for $delegationId"
+}
+
+"pid=$($process.Id) started=$(Get-Date -Format o) delegation=$delegationId relationship=$relationshipId" |
+    Set-Content -LiteralPath $lockFile -Encoding UTF8
+
+Start-Sleep -Seconds 2
+if ($process.HasExited) {
+    $stdoutTail = Get-Content -LiteralPath $stdoutLog -ErrorAction SilentlyContinue -Tail 20 | Out-String
+    $stderrTail = Get-Content -LiteralPath $stderrLog -ErrorAction SilentlyContinue -Tail 20 | Out-String
+    Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+    Write-DispatchLog "worker run exited immediately for $delegationId code=$($process.ExitCode) stdout=$stdoutTail stderr=$stderrTail"
+    throw "worker run exited immediately for $delegationId with code $($process.ExitCode)"
 }
 
 "$delegationId`t$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" | Add-Content -LiteralPath $dispatchedFile
 if ($eventId) { $eventId | Add-Content -LiteralPath $seenFile }
+Write-DispatchLog "started worker run for $delegationId pid=$($process.Id) stdout=$stdoutLog stderr=$stderrLog"
 ```
 
 ### 2c. `NEW` - a fresh actionable event
@@ -471,6 +535,10 @@ try {
 Codex Desktop worker-run guardrails:
 
 - Create a per-delegation lock file under `$HOME\.heyarp-worker\runs\` before launching `codex exec`; if the lock is held, skip the duplicate event.
+- Do not create an anonymous empty lock. After `Start-Process` returns, write `pid=<pid> started=<timestamp> delegation=<delegationId> relationship=<relationshipId>` into the lock file.
+- After `Start-Process`, wait briefly and check `HasExited`. If the worker process exits immediately, remove the lock, log the exit code plus stdout/stderr tails, and throw so the next watchdog tick can retry.
+- When a lock already exists, check for a live runner process whose command line contains `-File`, `work\arp_worker_run_codex.ps1`, and the delegation ID. Exclude the current diagnostic process. If no such process exists, log the stale lock contents, delete the lock, and start a new worker run. Empty lock files must log as `<empty>`, not crash while formatting the log message.
+- Build the `Start-Process -ArgumentList` array without empty optional values. Add `-SenderDid`, `-EventId`, and `-RequestId` only when their value is non-empty; PowerShell rejects null or empty argument-list entries.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
 - Keep the `codex exec` worker responsible for the full order cycle: `delegation accept` -> wait lock -> `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
 - Pin a known-working model/tier for unattended runs instead of inheriting possibly invalid desktop config. Test with a small `codex exec` prompt before enabling the scheduler.
@@ -478,6 +546,20 @@ Codex Desktop worker-run guardrails:
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - When the cycle reaches terminal state, remove every line for that delegation ID from `dispatched.txt`.
+
+Debug a stuck delegation in this order:
+
+```powershell
+$DEL = '<delegation-id>'
+Get-Content -LiteralPath "$HOME\.heyarp-worker\monitor.log" -Tail 100
+Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.dispatch.log" -Tail 100
+Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.runner.log" -Tail 100
+Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.runner.stderr.log" -Tail 100
+Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and $_.CommandLine -match 'powershell(\.exe)?"?\s+-NoProfile\s+-ExecutionPolicy\s+Bypass\s+-File' -and $_.CommandLine.Contains('work\arp_worker_run_codex.ps1') -and $_.CommandLine.Contains($DEL)
+} | Select-Object ProcessId,Name,CommandLine
+Get-Content -LiteralPath "$HOME\.heyarp-worker\runs\$DEL.lock" -ErrorAction SilentlyContinue
+```
 
 | Step                                         | Command                                                                                                                           | Then wait for                                                                            |
 | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -581,6 +663,7 @@ State -> next step: delegation `offered` -> `delegation accept`; `accepted` -> w
 | work-log `responded` + lock `in_progress`                          | worker run crashed before the on-chain `escrow submit-work`                                                                    | re-dispatched; new worker run runs `escrow submit-work` (3a guard)                                                                                                                        |
 | work-log `responded` + lock `submitted`, no receipt                 | worker run crashed before `receipt propose`                                                                                    | re-dispatched; new worker run proposes the receipt                                                                                                                                        |
 | Delegation `canceled`                                              | buyer timed out waiting for the response                                                                                       | `DONE` cleanup frees the relationship; the buyer's next delegation works (2a)                                                                                                             |
+| `DONE` cleanup writes null                                         | filtered `dispatched.txt` result was empty, causing `WriteAllLines` to receive `$null` (`Value cannot be null`)                | wrap the filtered result in `@(...)` before casting to `[string[]]`; empty arrays are valid and rewrite `dispatched.txt` to empty                                                          |
 | Two orders from one buyer, second ignored                          | dedup keyed by relationship instead of delegation                                                                              | dedup is per delegation ID (2d) - the two delegation IDs progress independently                                                                                                           |
 | `work respond` fails "already responded"                           | a re-dispatch raced the old worker run                                                                                         | guard with a state read before responding (3a); the failure is harmless                                                                                                                   |
 | Required step silently skipped (`submit-work` never ran)            | guard's state read flapped -> empty `$state` -> skipped                                                                        | 3a: retry the read; skip only if state is past the step; unknown read -> throw (re-dispatch)                                                                                              |
