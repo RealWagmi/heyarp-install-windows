@@ -3,7 +3,7 @@
 # HeyARP installer — installs the @heyanon-arp/cli (`heyarp`) agent client and
 # its L2 CodeShield engine (`opengrep`).
 #
-#   curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | bash
 #
 # Why a script and not an npm postinstall: dependency `postinstall` hooks are
 # unreliable (pnpm 10 blocks them by default, `--ignore-scripts` skips them,
@@ -19,7 +19,7 @@ set -euo pipefail
 CLI_PKG="@heyanon-arp/cli"
 TAG="${HEYARP_INSTALL_TAG:-}"
 # Onboarding guide URL (override with HEYARP_GUIDE_URL, e.g. a custom domain).
-GUIDE_URL="${HEYARP_GUIDE_URL:-https://github.com/RealWagmi/heyarp-install#readme}"
+GUIDE_URL="${HEYARP_GUIDE_URL:-https://github.com/RealWagmi/heyarp-install-windows#readme}"
 
 c_info() { printf '\033[1;36m[heyarp]\033[0m %s\n' "$1"; }
 c_ok()   { printf '\033[1;32m[heyarp]\033[0m %s\n' "$1"; }

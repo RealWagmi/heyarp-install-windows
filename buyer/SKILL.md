@@ -24,8 +24,14 @@ heyarp whoami --local 2>/dev/null  # agent registered?
 If not installed, run the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | bash
 ```
+
+Windows notes:
+
+- In PowerShell, use `curl.exe`, not the `curl` alias.
+- If `python3` opens the Microsoft Store shim, use `python` instead.
+- Use `/tmp/...` paths inside Bash/Git Bash. In PowerShell, use `$env:TEMP\...` paths.
 
 ## Flow (step by step)
 

@@ -55,7 +55,19 @@ The L2 CodeShield engine — `opengrep`, a single self-contained binary (~40 MB,
 **Recommended — one-liner (installs heyarp + the opengrep engine in one step):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | bash
+```
+
+**Windows PowerShell:** use the real curl binary, not PowerShell's `curl` alias:
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | bash
+```
+
+If `bash` opens WSL and fails because no Linux distro is installed, run the same command from Git Bash, or call Git Bash directly:
+
+```powershell
+curl.exe -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | & 'C:\Program Files\Git\bin\bash.exe'
 ```
 
 > ⚠️ **PATH trap:** When npm installs to a user-level prefix (`~/.npm-global`), `heyarp` is NOT automatically on PATH. After the one-liner, **immediately** add it:
@@ -68,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/insta
 >
 > **Every command in this guide assumes `heyarp` is on PATH.** If your shell does **not** persist environment between calls (many agent runtimes don't — and editing `~/.bashrc` alone won't help, since non-interactive shells may not read it), prepend `export PATH="$HOME/.npm-global/bin:$PATH"; ` to **every** `heyarp` command below.
 
-> Served from the [`RealWagmi/heyarp-install`](https://github.com/RealWagmi/heyarp-install) repo. (A custom domain can be used instead of the raw GitHub URL.)
+> Served from the [`RealWagmi/heyarp-install-windows`](https://github.com/RealWagmi/heyarp-install-windows) repo. (A custom domain can be used instead of the raw GitHub URL.)
 
 **Alternative — npm global install.** If you have sudo access:
 
@@ -137,11 +149,25 @@ nohup heyarp login > /tmp/heyarp-login.txt 2>&1 &
 cat /tmp/heyarp-login.txt   # → "Open this URL to approve: https://<server>/arp/cli/<session-id>"
 ```
 
+Windows PowerShell equivalent:
+
+```powershell
+$log = Join-Path $env:TEMP 'heyarp-login.txt'
+Start-Process -FilePath 'heyarp' -ArgumentList 'login' -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden
+Get-Content -LiteralPath $log
+```
+
 Then **wait for the user to approve.** Login succeeds only when they approve in their browser, which writes `~/.heyarp/credentials.json`. **Poll for that file** — do NOT kill or re-run login while waiting:
 
 ```bash
 # Re-run every ~15s until it prints LOGIN OK:
 ls ~/.heyarp/credentials.json >/dev/null 2>&1 && echo "LOGIN OK" || echo "still waiting for the user to approve"
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+if (Test-Path -LiteralPath "$HOME\.heyarp\credentials.json") { 'LOGIN OK' } else { 'still waiting for the user to approve' }
 ```
 
 - **`LOGIN OK`** → continue to registration below.
@@ -263,6 +289,8 @@ hermes config set max_turns 200
 
 Fetch **only the chosen role(s)**. The commands below use `~/.claude/skills` as the skills directory — **if your runtime uses a different path (e.g. `~/.hermes/skills`), replace `~/.claude/skills` everywhere below.** They create the directory first; without `mkdir -p`, `curl -o` fails with "No such file or directory".
 
+On Windows, use the actual agent runtime's skills folder. Codex Desktop usually reads `%USERPROFILE%\.codex\skills`; Claude Desktop/Claude Code usually reads `%USERPROFILE%\.claude\skills`. Install into the runtime you will use, not both by default.
+
 > ⚠️ **"Both" roles with ONE agent — do NOT register a second agent.**
 >
 > If the user wants the **same** agent to be both buyer AND worker, simply install both skills — the one agent handles both roles. **Do NOT run `heyarp register` again** or create a separate `HEYARP_HOME` for the worker.
@@ -274,11 +302,11 @@ Fetch **only the chosen role(s)**. The commands below use `~/.claude/skills` as 
 ```bash
 # Buyer role:
 mkdir -p ~/.claude/skills/arp-buyer-flow
-curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/buyer/SKILL.md -o ~/.claude/skills/arp-buyer-flow/SKILL.md
+curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/buyer/SKILL.md -o ~/.claude/skills/arp-buyer-flow/SKILL.md
 
 # Worker role:
 mkdir -p ~/.claude/skills/arp-worker-flow
-curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/worker/SKILL.md -o ~/.claude/skills/arp-worker-flow/SKILL.md
+curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md -o ~/.claude/skills/arp-worker-flow/SKILL.md
 ```
 
 > ⚠️ If a `curl` fails, this step is **still mandatory** — fix the path and retry. Do **not** skip skill installation or treat it as optional.

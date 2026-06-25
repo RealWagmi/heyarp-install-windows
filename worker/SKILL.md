@@ -13,7 +13,9 @@ User asks to run/serve as an ARP worker, start servicing orders, monitor the inb
 
 ## Prerequisites check
 
-Same as the buyer skill (see `../buyer/SKILL.md` → Prerequisites): `heyarp` installed (`curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install/main/install.sh | bash`), settlement wallet funded for fees (the worker **stakes lamports** at `escrow accept`, so keep some SOL even for SPL-priced jobs).
+Same as the buyer skill (see `../buyer/SKILL.md` → Prerequisites): `heyarp` installed (`curl -fsSL https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.sh | bash`), settlement wallet funded for fees (the worker **stakes lamports** at `escrow accept`, so keep some SOL even for SPL-priced jobs).
+
+Windows notes: in PowerShell use `curl.exe`, not the `curl` alias; prefer a real Bash runtime such as Git Bash if WSL `bash` exists but has no distro installed; use `python` if `python3` resolves to the Microsoft Store shim.
 
 ## Core model
 
@@ -186,6 +188,13 @@ $tr = "wscript.exe `"$vbs`""
 schtasks /Create /TN $taskName /TR $tr /SC MINUTE /MO 1 /F
 ```
 
+Task Scheduler notes:
+
+- Use the hidden `wscript.exe` launcher above. Do not schedule raw `powershell.exe` every minute unless you accept a flashing console window.
+- A normal per-user task survives PC reboot, but usually starts only after that Windows user logs in.
+- If the worker uses `codex exec`, Codex Desktop must still be installed and available at the configured path after reboot.
+- To remove the monitor: `schtasks /Delete /TN 'ARP worker monitor' /F`.
+
 The PowerShell wrapper should:
 
 - Resolve a Bash runtime, then run `& $bash work/arp_worker_watch.sh`:
@@ -239,7 +248,7 @@ Codex Desktop worker-run guardrails:
 - Keep the `codex exec` worker responsible for the full order cycle: `delegation accept` → wait lock → `escrow accept` → wait work request → produce → `work respond` → `escrow submit-work` → `receipt propose` → wait release/self-claim.
 - Pin a known-working model/tier for unattended runs instead of inheriting possibly invalid desktop config. Test with a small `codex exec` prompt before enabling the scheduler.
 - Keep heartbeating while `codex exec` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the wrapper.
-- Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
+- Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON. In PowerShell, prefer `[System.IO.File]::WriteAllText($path, $json, [System.Text.UTF8Encoding]::new($false))` for JSON files.
 - Append the event id to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - When the cycle reaches terminal state, remove every line for that delegation id from `dispatched.txt`.
 
@@ -313,6 +322,8 @@ Mirror of the buyer flow, "my-turn" side. Wait for the buyer's moves with the sa
 | Respond                                          | `heyarp work respond <rel-id> <delegation-id> <request-id> --output-file /tmp/arp_out.json`                                                                                          | —                                                                                        |
 | **Submit work (ON-CHAIN)**                       | `heyarp escrow submit-work <delegation-id>`                                                                                                                                          | — (InProgress → Submitted; starts the buyer's review window)                             |
 | Propose receipt                                  | `heyarp receipt propose <buyer-did> <delegation-id> --auto-hashes --rel-id <rel-id> --request-id <request-id> --verdict accepted`                                                    | `status --wait --until cycle.released` (buyer claims → funds released to you)            |
+
+On Windows, `/tmp/...` paths mean Bash/Git Bash paths. If running the same step from PowerShell, use a path under `$env:TEMP` and pass that exact path to `--output-file`.
 
 Notes:
 
