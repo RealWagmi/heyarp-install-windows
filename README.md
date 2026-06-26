@@ -310,6 +310,7 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   Get-Content -LiteralPath "$HOME\.codex\skills\arp-worker-flow\SKILL.md" -Raw
   ```
   > For the worker role, setup is not done until that scheduled watchdog is verified running.
+  > If several local worker agents share one `agents.json`, follow the worker skill's multi-worker notes: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
 - **buyer** is used on-demand; no scheduled watchdog needed.
 
 The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guide covered **install + registration only**.

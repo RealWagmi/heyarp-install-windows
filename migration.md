@@ -155,6 +155,22 @@ Why:
 - The recent inbox page must not starve older pending delegations. Live delegation state is the source of truth, and pending work is dispatched oldest first when timestamps are available.
 - When capacity is full, leaving the event un-seen preserves retry behavior for the next watchdog tick.
 
+### Follow-up: Explicit multi-worker identity
+
+Changed files:
+
+- `worker/arp-worker-watchdog.js` lines 98-100: added `withFromDid()` helper.
+- `worker/arp-worker-watchdog.js` lines 263, 360, 373, 378-385, 406, 432, 466, 473, and 548: plumbed `--from-did` through watchdog reads, handshake acceptance, worker-run dispatch, and line handling.
+- `worker/arp-worker-run-codex.js` lines 64, 67-74, and 108: worker prompts now include `fromDid` and instruct Codex to pass `--from-did` in HeyARP commands.
+- `worker/arp-worker-watchdog-hidden.vbs`: forwards every Task Scheduler argument to the Node watchdog, not only `--workspace`.
+- `worker/SKILL.md` lines 78, 129-141, 165-174, and 182: documented one scheduled task and one state root per worker DID.
+- `README.md`: worker setup note now points agents to the worker skill's multi-worker instructions.
+
+Why:
+
+- Separate state roots were already possible, but worker identity was ambiguous when multiple local agents shared one `agents.json`.
+- Each worker watchdog must use an explicit `--from-did <worker-did>` and a separate state root so `seen.txt`, `dispatched.txt`, locks, logs, and HeyARP commands do not cross between workers.
+
 ## Operational behavior after migration
 
 1. Windows Task Scheduler runs every minute.

@@ -61,16 +61,17 @@ Context:
 - senderDid: ${context.senderDid || ''}
 - eventId: ${context.eventId || ''}
 - requestId: ${context.requestId || ''}
+- fromDid: ${context.fromDid || ''}
 
 Required behavior:
-1. Read live state with heyarp delegations, heyarp escrow show, heyarp work-list, and heyarp receipts.
-2. If delegation is offered, run: heyarp delegation accept ${context.relationshipId} ${context.delegationId}
+1. Read live state with heyarp delegations, heyarp escrow show, heyarp work-list, and heyarp receipts${context.fromDid ? `, always passing --from-did ${context.fromDid}` : ''}.
+2. If delegation is offered, run: heyarp delegation accept ${context.relationshipId} ${context.delegationId}${context.fromDid ? ` --from-did ${context.fromDid}` : ''}
 3. Wait for delegation.locked.
-4. If escrow state is created, run: heyarp escrow accept ${context.delegationId}
+4. If escrow state is created, run: heyarp escrow accept ${context.delegationId}${context.fromDid ? ` --from-did ${context.fromDid}` : ''}
 5. Wait for work.requested.
 6. Produce the requested deliverable.
 7. Respond with heyarp work respond using a UTF-8 no-BOM JSON output file.
-8. Submit work on-chain with heyarp escrow submit-work ${context.delegationId}.
+8. Submit work on-chain with heyarp escrow submit-work ${context.delegationId}${context.fromDid ? ` --from-did ${context.fromDid}` : ''}.
 9. Propose receipt.
 10. Wait for release or self-claim when allowed.
 
@@ -104,6 +105,7 @@ function main() {
     senderDid: args['sender-did'],
     eventId: args['event-id'],
     requestId: args['request-id'],
+    fromDid: args['from-did'],
   };
 
   appendLine(runnerLog, `${new Date().toISOString()} start pid=${process.pid} codex=${codex}`);

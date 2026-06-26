@@ -95,6 +95,10 @@ function runHeyarpJson(args, log, label) {
   }
 }
 
+function withFromDid(args, fromDid) {
+  return fromDid ? [...args, '--from-did', fromDid] : args;
+}
+
 // Resolve all persistent worker paths.
 // Everything under .heyarp-worker survives process exits and PC reboots.
 function getStatePaths(args) {
@@ -256,6 +260,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   if (context.senderDid) workerArgs.push('--sender-did', context.senderDid);
   if (context.eventId) workerArgs.push('--event-id', context.eventId);
   if (context.requestId) workerArgs.push('--request-id', context.requestId);
+  if (context.fromDid) workerArgs.push('--from-did', context.fromDid);
   return workerArgs;
 }
 
@@ -337,7 +342,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // Handle one normalized watchdog line.
 // DONE cleans tracking, STALL starts a replacement worker, NEW either accepts
 // a handshake inline or starts a new worker run.
-function handleLine(line, paths, workspace, log) {
+function handleLine(line, paths, workspace, log, fromDid) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -352,6 +357,7 @@ function handleLine(line, paths, workspace, log) {
     return startWorkerRun({
       relationshipId: parts[1],
       delegationId: parts[2],
+      fromDid,
     }, paths, workspace, log);
   }
 
@@ -364,18 +370,19 @@ function handleLine(line, paths, workspace, log) {
     senderDid: parts[4],
     delegationId: parts[5],
     requestId: parts[6],
+    fromDid,
   };
 
   if (context.type === 'handshake') {
     // Handshakes are cheap and do not need a Codex worker run.
-    const result = runShell('heyarp', [
+    const result = runShell('heyarp', withFromDid([
       'send-handshake-response',
       context.senderDid,
       '--decision',
       'accept',
       '--notes',
       'Ready to take your order.',
-    ]);
+    ], fromDid));
     if (result.status !== 0) throw new Error(`handshake accept failed: ${(result.stderr || '').trim()}`);
     if (context.eventId) appendLine(paths.seenFile, context.eventId);
     log(`NEW handshake accepted event=${context.eventId}`);
@@ -396,6 +403,7 @@ function main() {
   const workspace = path.resolve(args.workspace || process.cwd());
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
   const maxWorkers = parseNonNegativeNumber(args['max-workers'] || process.env.ARP_WORKER_MAX_WORKERS, 3);
+  const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
@@ -421,7 +429,7 @@ function main() {
     // Inbox scan: find fresh handshakes, delegation offers, and work requests.
     // Worker events are not dispatched directly from the inbox page. They feed
     // metadata into the live delegation scan below, so old backlog can run first.
-    const events = runHeyarpJson(['inbox', '--json'], log, 'inbox read');
+    const events = runHeyarpJson(withFromDid(['inbox', '--json'], fromDid), log, 'inbox read');
     events.forEach((event, index) => {
       const content = event && event.body && event.body.content ? event.body.content : {};
       const type = event.type;
@@ -455,14 +463,14 @@ function main() {
     // This is what makes a crashed worker get re-dispatched even if no new
     // inbox event arrives. It also discovers backlog that is older than the
     // latest inbox page, so pending work is dispatched oldest first.
-    const relationships = runHeyarpJson(['relationships', '--json'], log, 'relationships read');
+    const relationships = runHeyarpJson(withFromDid(['relationships', '--json'], fromDid), log, 'relationships read');
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
     const backlog = [];
     for (const relationship of relationships) {
       const rel = relationship.relationshipId;
       if (!rel) continue;
-      const delegations = runHeyarpJson(['delegations', rel, '--json'], log, `delegations read ${rel}`);
+      const delegations = runHeyarpJson(withFromDid(['delegations', rel, '--json'], fromDid), log, `delegations read ${rel}`);
       for (const delegation of delegations) {
         const did = delegation.delegationId;
         const state = delegation.state;
@@ -537,7 +545,7 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log);
+        const started = handleLine(line, paths, workspace, log, fromDid);
         if (started) activeWorkers += 1;
       }
     }

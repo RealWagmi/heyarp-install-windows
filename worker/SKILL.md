@@ -75,6 +75,7 @@ Windows-specific guardrails:
 - Only wake a full Codex worker run when the watchdog emits `NEW delegation`, `NEW work_request`, or `STALL`.
 - Process `NEW handshake` inline in the watchdog; process `DONE` inline by cleaning tracking files.
 - Treat lock files as hints, not proof of a live worker. If no real `node ...arp-worker-run-codex.js ...<delegationId>` process exists for that delegation, remove the stale lock and re-dispatch.
+- If several local worker agents share one `%USERPROFILE%\.heyarp\agents.json`, run one scheduled task per worker DID. Each task must pass its own `--from-did <worker-did>` and its own `--state-root`.
 
 ## 1. Continuous inbox monitor
 
@@ -125,10 +126,19 @@ $skillsRoot = "$HOME\.codex\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 $hiddenLauncher = Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs'
 $workspace = (Get-Location).Path
+$fromDid = '' # Optional: set to did:arp:... when multiple local agents share one agents.json.
+$stateRoot = Join-Path $HOME '.heyarp-worker'
+$watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`""
+if ($fromDid) {
+  $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+  $taskName = "ARP worker monitor $safeDid"
+  $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+  $watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`""
+}
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
-  -Argument "`"$hiddenLauncher`" --workspace `"$workspace`""
+  -Argument $watchdogArgs
 
 $trigger = New-ScheduledTaskTrigger `
   -Once `
@@ -152,12 +162,24 @@ Register-ScheduledTask `
 
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window every minute. The hidden launcher keeps the watchdog tick in the background.
 
+For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Use a unique task name and unique state root for each DID:
+
+```powershell
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$taskName = "ARP worker monitor $safeDid"
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+```
+
+Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
+
 The watchdog should:
 
 - Exit immediately when there are no `NEW`, `STALL`, or `DONE` lines.
 - Discover pending backlog from live `heyarp relationships --json` and `heyarp delegations <rel-id> --json`, not only from the recent inbox page.
 - Sort pending undispatched delegations oldest first when the server returns timestamps; unknown timestamps sort last.
 - Keep at most `MAX_WORKERS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
+- Pass `--from-did <worker-did>` to every HeyARP read/action when configured, and pass the same DID into the Codex worker run prompt.
 - Process `DONE` by removing that delegation ID from `dispatched.txt`.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
 - For `NEW delegation`, `NEW work_request`, and `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
