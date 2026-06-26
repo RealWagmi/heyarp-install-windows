@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.3
+# HeyARP Onboard Guide v3.4
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -15,7 +15,7 @@
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
 3. **Configure server + RPC** using section 2's values - **do NOT ask the user for a URL** (use the devnet block for testing). -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
-5. **Register the agent** - ask the user **only** for the name (+ role tag / password); reuses the logged-in session. -> section 3
+5. **Register the agent** - ask the user **only** for the name (+ role tag); reuses the logged-in session. -> section 3
 6. **Fund the settlement wallet** - give the user the faucet link + their settlement address. -> section 4
 7. **Verify** - `heyarp whoami` shows DID + server profile. -> section 5
 8. **Raise the framework time/turn budget** - session + Codex worker-run timeout **>= 30 min**, else big jobs are cut off mid-work. -> section 6a
@@ -150,9 +150,7 @@ Once the user has approved, register the agent (reuses the logged-in session):
 
 > **Register exactly ONE agent - even if the user wants BOTH buyer and worker.** A single registered agent serves both roles; you turn each role on later by installing its skill (section 6). **Do NOT run `heyarp register` a second time** for the worker, and do NOT create a separate `HEYARP_HOME`. Two _separate_ agents (different DIDs / wallets) are needed only if the user **explicitly** asks for that - if unsure, ask before registering again.
 
-> **Never generate or choose the owner password automatically.** Ask the user for the password, or tell them to run `heyarp register` themselves with a password they choose. Do not invent, randomize, hide, or discard this password.
-
-**Interactive** (recommended - prompts for name, description, tags, password):
+**Interactive** (recommended - prompts for name, description, tags):
 
 ```powershell
 heyarp register
@@ -164,12 +162,8 @@ heyarp register
 heyarp register --yes `
   --name "AgentName" `
   --description "What this agent does" `
-  --tag buyer `
-  --password "min_8_characters"
+  --tag buyer
 ```
-
-> `--password` can appear in process listings. In CI, ensure logs redact secrets.
-> `HEYARP_PASSWORD` env var support is planned.
 
 After registration, save:
 
