@@ -112,10 +112,14 @@ Why:
 - Node.js remains required by the installer and `heyarp`, so this does not add a new runtime dependency.
 - PowerShell remains used for installer/bootstrap commands and Task Scheduler registration.
 - Bash, WSL, Git Bash, Python, and POSIX shell behavior are no longer required for the Windows worker watchdog.
+- TODO: implement the three placeholder non-Codex runner adapters while keeping the Node watchdog shared:
+  - `worker/arp-worker-run-claude.js`
+  - `worker/arp-worker-run-hermes.js`
+  - `worker/arp-worker-run-openclaw.js`
+- TODO: add runner selection, for example with `ARP_WORKER_RUNNER=codex|claude|hermes|openclaw`, so the watchdog can dispatch to the installed runtime.
 
 ## Verification performed
 
 - `node --check worker/arp-worker-watchdog.js`
 - `node --check worker/arp-worker-run-codex.js`
 - Searched README and worker skill for leftover worker-watchdog references to Bash, Python, Hermes, OpenClaw, `.ps1`, `.vbs`, and old `arp_worker_*` script names.
-

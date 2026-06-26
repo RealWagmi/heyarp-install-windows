@@ -285,6 +285,9 @@ New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Nu
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-claude.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-claude.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-openclaw.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-openclaw.js"
 ```
 
 > If `Invoke-WebRequest` fails, this step is **still mandatory** - fix the path and retry. Do **not** skip skill installation or treat it as optional.

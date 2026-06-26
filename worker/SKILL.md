@@ -205,6 +205,14 @@ Codex Desktop worker-run guardrails:
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - When the cycle reaches terminal state, remove every line for that delegation ID from `dispatched.txt`.
 
+TODO: implement the placeholder runtime adapters for non-Codex agents. The Node watchdog is intended to stay shared, but the worker runner currently uses `arp-worker-run-codex.js`. Placeholder files already exist for Claude Code, Hermes, and OpenClaw:
+
+- `arp-worker-run-claude.js`
+- `arp-worker-run-hermes.js`
+- `arp-worker-run-openclaw.js`
+
+Each adapter must accept the same context arguments as `arp-worker-run-codex.js`, create the same prompt, heartbeat to `dispatched.txt`, write the same logs/final output files, and remove the per-delegation lock on exit.
+
 Debug a stuck delegation in this order:
 
 ```powershell

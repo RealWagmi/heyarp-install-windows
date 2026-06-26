@@ -5,8 +5,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+// Delegations in these states are finished from the worker monitor's point of view.
+// When the watchdog sees one of them, it removes the delegation from tracking.
 const TERMINAL_STATES = new Set(['completed', 'canceled', 'declined', 'refunded']);
 
+// Read simple --key value command-line arguments.
+// Task Scheduler passes options this way, for example:
+//   node arp-worker-watchdog.js --workspace C:\path\to\workspace
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
@@ -24,6 +29,7 @@ function parseArgs(argv) {
   return out;
 }
 
+// Small filesystem helpers. They keep state files durable across ticks and reboots.
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -45,12 +51,16 @@ function writeLines(file, lines) {
   fs.writeFileSync(file, lines.length ? `${lines.join('\n')}\n` : '', { encoding: 'utf8' });
 }
 
+// Quote one command argument for Windows shell execution.
+// We use this for heyarp commands because npm global commands are often .cmd shims.
 function quoteCmdArg(value) {
   const text = String(value);
   if (/^[A-Za-z0-9_./:=@-]+$/.test(text)) return text;
   return `"${text.replace(/"/g, '\\"')}"`;
 }
 
+// Run a short command and wait for it to finish.
+// The watchdog uses this only for cheap heyarp reads and handshake acceptance.
 function runShell(command, args, options = {}) {
   const cmdline = [command, ...args].map(quoteCmdArg).join(' ');
   return spawnSync(cmdline, {
@@ -62,6 +72,9 @@ function runShell(command, args, options = {}) {
   });
 }
 
+// Run a heyarp command that should return JSON.
+// If it fails or returns invalid JSON, log the problem and return an empty list.
+// This keeps one bad read from crashing the scheduled monitor tick.
 function runHeyarpJson(args, log, label) {
   const result = runShell('heyarp', args);
   if (result.error) {
@@ -82,6 +95,8 @@ function runHeyarpJson(args, log, label) {
   }
 }
 
+// Resolve all persistent worker paths.
+// Everything under .heyarp-worker survives process exits and PC reboots.
 function getStatePaths(args) {
   const home = process.env.USERPROFILE || process.env.HOME;
   if (!home) throw new Error('USERPROFILE/HOME is not set');
@@ -102,6 +117,9 @@ function getStatePaths(args) {
   };
 }
 
+// Prevent overlapping watchdog ticks.
+// Task Scheduler may start a new tick while the previous one is still running.
+// The lock makes the new tick exit instead of racing the old one.
 function withMonitorLock(paths, fn) {
   const staleMs = 5 * 60 * 1000;
   if (fs.existsSync(paths.monitorLock)) {
@@ -123,6 +141,8 @@ function withMonitorLock(paths, fn) {
   }
 }
 
+// Read dispatched.txt into a map of delegationId -> latest heartbeat epoch.
+// The file is append-only during normal operation, so latest timestamp wins.
 function readDispatchMap(file) {
   const map = new Map();
   for (const line of readLines(file)) {
@@ -136,10 +156,14 @@ function readDispatchMap(file) {
   return map;
 }
 
+// Remove a terminal delegation from dispatched.txt.
+// This is used for DONE so completed/canceled work stops being health-checked.
 function removeDispatched(file, delegationId) {
   writeLines(file, readLines(file).filter((line) => !line.startsWith(`${delegationId}\t`)));
 }
 
+// Ask Windows for a process command line by PID.
+// This lets us decide whether a lock file belongs to a real live worker process.
 function getProcessCommandLine(pid) {
   if (!pid) return '';
   const ps = [
@@ -151,6 +175,8 @@ function getProcessCommandLine(pid) {
   return result.status === 0 ? (result.stdout || '').trim() : '';
 }
 
+// Parse a lock file such as:
+//   pid=1234 started=... delegation=... relationship=...
 function readLock(lockFile) {
   if (!fs.existsSync(lockFile)) return {};
   const text = fs.readFileSync(lockFile, 'utf8');
@@ -162,6 +188,8 @@ function readLock(lockFile) {
   return { text, fields };
 }
 
+// Check whether a delegation lock points to a live worker runner.
+// A stale lock must not block work forever after a crash or reboot.
 function isActiveWorker(lockFile, delegationId) {
   const lock = readLock(lockFile);
   const pid = Number(lock.fields && lock.fields.pid);
@@ -170,6 +198,8 @@ function isActiveWorker(lockFile, delegationId) {
   return commandLine.includes('arp-worker-run-codex.js') && commandLine.includes(delegationId);
 }
 
+// Build the argument list for the one-delegation runner process.
+// Optional IDs are added only when present so Node receives clean arguments.
 function buildWorkerArgs(context, paths, workspace, runnerPath) {
   const workerArgs = [
     runnerPath,
@@ -184,6 +214,10 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   return workerArgs;
 }
 
+// Start one real worker run for one delegation.
+// This does not do the ARP work itself. It starts arp-worker-run-codex.js,
+// writes logs, creates a lock, verifies the process stayed alive, then records
+// the delegation as dispatched.
 function startWorkerRun(context, paths, workspace, log) {
   if (!context.delegationId) throw new Error('cannot start worker run without delegationId');
 
@@ -200,6 +234,8 @@ function startWorkerRun(context, paths, workspace, log) {
     log(message);
   };
 
+  // If a lock exists, trust it only when the referenced process is still alive.
+  // Otherwise remove it and re-dispatch the work.
   if (fs.existsSync(lockFile)) {
     if (isActiveWorker(lockFile, context.delegationId)) {
       dispatch(`skip duplicate active run for ${context.delegationId}`);
@@ -210,6 +246,8 @@ function startWorkerRun(context, paths, workspace, log) {
     fs.rmSync(lockFile, { force: true });
   }
 
+  // Start the runner detached so the watchdog can exit quickly.
+  // Task Scheduler should run cheap ticks, not long order lifecycles.
   const outFd = fs.openSync(stdoutLog, 'a');
   const errFd = fs.openSync(stderrLog, 'a');
   const workerArgs = buildWorkerArgs(context, paths, workspace, runnerPath);
@@ -226,12 +264,15 @@ function startWorkerRun(context, paths, workspace, log) {
   fs.closeSync(outFd);
   fs.closeSync(errFd);
 
+  // Store PID metadata so future ticks can detect whether this worker is alive.
   fs.writeFileSync(
     lockFile,
     `pid=${child.pid} started=${new Date().toISOString()} delegation=${context.delegationId} relationship=${context.relationshipId}\n`,
     { encoding: 'utf8' },
   );
 
+  // Give the child a moment to fail fast. If it exits immediately, do not mark
+  // the event as handled; throw so a later watchdog tick can retry.
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
   if (!isActiveWorker(lockFile, context.delegationId)) {
     fs.rmSync(lockFile, { force: true });
@@ -241,12 +282,16 @@ function startWorkerRun(context, paths, workspace, log) {
     throw new Error(`worker run exited immediately for ${context.delegationId}`);
   }
 
+  // Only after the runner is alive do we mark this delegation/event as handled.
   appendLine(paths.dispatchedFile, `${context.delegationId}\t${Math.floor(Date.now() / 1000)}`);
   if (context.eventId) appendLine(paths.seenFile, context.eventId);
   dispatch(`started worker run for ${context.delegationId} pid=${child.pid}`);
   return true;
 }
 
+// Handle one normalized watchdog line.
+// DONE cleans tracking, STALL starts a replacement worker, NEW either accepts
+// a handshake inline or starts a new worker run.
 function handleLine(line, paths, workspace, log) {
   const parts = line.split('\t');
   const kind = parts[0];
@@ -278,6 +323,7 @@ function handleLine(line, paths, workspace, log) {
   };
 
   if (context.type === 'handshake') {
+    // Handshakes are cheap and do not need a Codex worker run.
     const result = runShell('heyarp', [
       'send-handshake-response',
       context.senderDid,
@@ -295,6 +341,12 @@ function handleLine(line, paths, workspace, log) {
   startWorkerRun(context, paths, workspace, log);
 }
 
+// Main scheduled tick:
+// 1. Load durable state.
+// 2. Scan inbox for new actionable events.
+// 3. Health-check tracked delegations for DONE or STALL.
+// 4. Process lines in DONE -> STALL -> NEW order.
+// 5. Exit quickly so Task Scheduler can call us again next minute.
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
@@ -304,10 +356,13 @@ function main() {
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
 
   withMonitorLock(paths, () => {
+    // seen.txt prevents processing the same inbox event twice.
+    // dispatched.txt tells us which delegations already have a worker run.
     const seen = new Set(readLines(paths.seenFile));
     const dispatched = readDispatchMap(paths.dispatchedFile);
     const lines = [];
 
+    // Inbox scan: find fresh handshakes, delegation offers, and work requests.
     const events = runHeyarpJson(['inbox', '--json'], log, 'inbox read');
     for (const event of events) {
       const content = event && event.body && event.body.content ? event.body.content : {};
@@ -321,6 +376,9 @@ function main() {
       }
     }
 
+    // Health check: inspect existing relationships and delegations.
+    // This is what makes a crashed worker get re-dispatched even if no new
+    // inbox event arrives.
     const relationships = runHeyarpJson(['relationships', '--json'], log, 'relationships read');
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
@@ -341,11 +399,13 @@ function main() {
       }
     }
 
+    // Idle is the expected common case. Log it and stop.
     if (!lines.length) {
       log('idle');
       return;
     }
 
+    // Cleanup first, recovery second, new work last.
     for (const kind of ['DONE', 'STALL', 'NEW']) {
       for (const line of lines.filter((candidate) => candidate.startsWith(`${kind}\t`))) {
         log(`handle ${line}`);
@@ -358,6 +418,8 @@ function main() {
 try {
   main();
 } catch (error) {
+  // Last-resort logging. Task Scheduler does not show an interactive error,
+  // so write failures to the durable monitor log for later debugging.
   const home = process.env.USERPROFILE || process.env.HOME || process.cwd();
   const fallbackLog = path.join(home, '.heyarp-worker', 'monitor.log');
   try {
