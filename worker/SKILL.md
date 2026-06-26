@@ -53,6 +53,7 @@ Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex w
 - **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
+- **Dispatch is capacity-limited and backlog-first.** The watchdog discovers pending delegations from live relationship/delegation state, sorts known delegation timestamps oldest first, and starts only up to `MAX_WORKERS` live runner processes. Inbox events provide fresh metadata, but the inbox page alone must not decide work order.
 
 ## Framework adapter - Windows Task Scheduler + Node.js + Codex Desktop
 
@@ -88,6 +89,8 @@ Three line kinds:
 | `DONE  <rel> <delId> <state>`                              | terminal (completed/canceled/declined/refunded)                             | clean up (2a)      |
 
 `STALL_MIN` defaults to 3 minutes. Override it only when needed by passing `--stall-min <minutes>` to `arp-worker-watchdog.js`. A stale heartbeat does not emit `STALL` while the per-delegation runner process is still alive.
+
+`MAX_WORKERS` defaults to 3. Override it with `--max-workers <count>` or `ARP_WORKER_MAX_WORKERS=<count>`. When capacity is full, the watchdog does not append the event to `seen.txt`; the next tick retries the same pending delegation.
 
 Minimal Windows layout:
 
@@ -152,6 +155,9 @@ Register-ScheduledTask `
 The watchdog should:
 
 - Exit immediately when there are no `NEW`, `STALL`, or `DONE` lines.
+- Discover pending backlog from live `heyarp relationships --json` and `heyarp delegations <rel-id> --json`, not only from the recent inbox page.
+- Sort pending undispatched delegations oldest first when the server returns timestamps; unknown timestamps sort last.
+- Keep at most `MAX_WORKERS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
 - Process `DONE` by removing that delegation ID from `dispatched.txt`.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
 - For `NEW delegation`, `NEW work_request`, and `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.

@@ -198,6 +198,51 @@ function isActiveWorker(lockFile, delegationId) {
   return commandLine.includes('arp-worker-run-codex.js') && commandLine.includes(delegationId);
 }
 
+// Count live per-delegation worker runners by checking lock files against real processes.
+// Capacity checks use this so one busy machine does not spawn too many Codex workers.
+function countActiveWorkers(paths) {
+  if (!fs.existsSync(paths.runsRoot)) return 0;
+  let count = 0;
+  for (const entry of fs.readdirSync(paths.runsRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.lock')) continue;
+    const delegationId = entry.name.slice(0, -'.lock'.length);
+    const lockFile = path.join(paths.runsRoot, entry.name);
+    if (isActiveWorker(lockFile, delegationId)) count += 1;
+  }
+  return count;
+}
+
+// Pick a stable age/order value from whatever timestamp shape the server returns.
+// Unknown timestamps sort last so known older delegations are dispatched first.
+function getDelegationSortTime(delegation) {
+  const candidates = [
+    delegation.createdAt,
+    delegation.created_at,
+    delegation.offeredAt,
+    delegation.offered_at,
+    delegation.updatedAt,
+    delegation.updated_at,
+    delegation.timestamp,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function isWorkerLine(line) {
+  const parts = line.split('\t');
+  return parts[0] === 'STALL' || (parts[0] === 'NEW' && parts[2] !== 'handshake');
+}
+
+function parseNonNegativeNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 // Build the argument list for the one-delegation runner process.
 // Optional IDs are added only when present so Node receives clean arguments.
 function buildWorkerArgs(context, paths, workspace, runnerPath) {
@@ -300,18 +345,17 @@ function handleLine(line, paths, workspace, log) {
     const delegationId = parts[2];
     removeDispatched(paths.dispatchedFile, delegationId);
     log(`DONE cleaned ${delegationId}`);
-    return;
+    return false;
   }
 
   if (kind === 'STALL') {
-    startWorkerRun({
+    return startWorkerRun({
       relationshipId: parts[1],
       delegationId: parts[2],
     }, paths, workspace, log);
-    return;
   }
 
-  if (kind !== 'NEW') return;
+  if (kind !== 'NEW') return false;
 
   const context = {
     relationshipId: parts[1],
@@ -335,10 +379,10 @@ function handleLine(line, paths, workspace, log) {
     if (result.status !== 0) throw new Error(`handshake accept failed: ${(result.stderr || '').trim()}`);
     if (context.eventId) appendLine(paths.seenFile, context.eventId);
     log(`NEW handshake accepted event=${context.eventId}`);
-    return;
+    return false;
   }
 
-  startWorkerRun(context, paths, workspace, log);
+  return startWorkerRun(context, paths, workspace, log);
 }
 
 // Main scheduled tick:
@@ -350,7 +394,8 @@ function handleLine(line, paths, workspace, log) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
-  const stallMinutes = Number(args['stall-min'] || 3);
+  const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
+  const maxWorkers = parseNonNegativeNumber(args['max-workers'] || process.env.ARP_WORKER_MAX_WORKERS, 3);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
@@ -361,10 +406,23 @@ function main() {
     const seen = new Set(readLines(paths.seenFile));
     const dispatched = readDispatchMap(paths.dispatchedFile);
     const lines = [];
+    const queuedDelegations = new Set();
+    const pendingEvents = new Map();
+    const discoveredDelegations = new Set();
+
+    const pushLine = (parts) => {
+      const line = parts.join('\t');
+      lines.push(line);
+      const kind = parts[0];
+      const delegationId = kind === 'DONE' || kind === 'STALL' ? parts[2] : parts[5];
+      if (delegationId) queuedDelegations.add(delegationId);
+    };
 
     // Inbox scan: find fresh handshakes, delegation offers, and work requests.
+    // Worker events are not dispatched directly from the inbox page. They feed
+    // metadata into the live delegation scan below, so old backlog can run first.
     const events = runHeyarpJson(['inbox', '--json'], log, 'inbox read');
-    for (const event of events) {
+    events.forEach((event, index) => {
       const content = event && event.body && event.body.content ? event.body.content : {};
       const type = event.type;
       const eventId = event.eventId;
@@ -372,16 +430,35 @@ function main() {
       const requestId = event.requestId || content.request_id || '';
       const actionable = type === 'handshake' || type === 'work_request' || (type === 'delegation' && content.action === 'offer');
       if (actionable && eventId && !seen.has(eventId)) {
-        lines.push(['NEW', event.relationshipId || '', type || '', eventId, event.senderDid || '', delegationId, requestId].join('\t'));
+        if (type === 'handshake') {
+          pushLine(['NEW', event.relationshipId || '', type || '', eventId, event.senderDid || '', delegationId, requestId]);
+        } else if (delegationId && dispatched.has(delegationId)) {
+          appendLine(paths.seenFile, eventId);
+          seen.add(eventId);
+          log(`inbox event ${eventId} already covered by dispatched delegation ${delegationId}`);
+        } else if (delegationId) {
+          pendingEvents.set(delegationId, {
+            relationshipId: event.relationshipId || '',
+            type: type || 'backlog',
+            eventId,
+            senderDid: event.senderDid || '',
+            requestId,
+            order: index,
+          });
+        } else {
+          pushLine(['NEW', event.relationshipId || '', type || '', eventId, event.senderDid || '', delegationId, requestId]);
+        }
       }
-    }
+    });
 
     // Health check: inspect existing relationships and delegations.
     // This is what makes a crashed worker get re-dispatched even if no new
-    // inbox event arrives.
+    // inbox event arrives. It also discovers backlog that is older than the
+    // latest inbox page, so pending work is dispatched oldest first.
     const relationships = runHeyarpJson(['relationships', '--json'], log, 'relationships read');
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
+    const backlog = [];
     for (const relationship of relationships) {
       const rel = relationship.relationshipId;
       if (!rel) continue;
@@ -390,8 +467,9 @@ function main() {
         const did = delegation.delegationId;
         const state = delegation.state;
         if (!did) continue;
+        discoveredDelegations.add(did);
         if (TERMINAL_STATES.has(state)) {
-          if (dispatched.has(did)) lines.push(['DONE', rel, did, state].join('\t'));
+          if (dispatched.has(did)) pushLine(['DONE', rel, did, state]);
         } else if (dispatched.has(did)) {
           const age = now - dispatched.get(did);
           if (age > stallSeconds) {
@@ -399,12 +477,48 @@ function main() {
             if (isActiveWorker(lockFile, did)) {
               log(`heartbeat stale for ${did} age_min=${Math.floor(age / 60)} but runner process is alive; skip STALL`);
             } else {
-              lines.push(['STALL', rel, did, state, Math.floor(age / 60)].join('\t'));
+              pushLine(['STALL', rel, did, state, Math.floor(age / 60)]);
             }
           }
+        } else if (!queuedDelegations.has(did)) {
+          const pendingEvent = pendingEvents.get(did) || {};
+          backlog.push({
+            line: [
+              'NEW',
+              rel,
+              pendingEvent.type || 'backlog',
+              pendingEvent.eventId || '',
+              pendingEvent.senderDid || '',
+              did,
+              pendingEvent.requestId || '',
+            ].join('\t'),
+            sortTime: getDelegationSortTime(delegation),
+          });
+          queuedDelegations.add(did);
         }
       }
     }
+
+    for (const [delegationId, pendingEvent] of pendingEvents.entries()) {
+      if (discoveredDelegations.has(delegationId) || queuedDelegations.has(delegationId)) continue;
+      backlog.push({
+        line: [
+          'NEW',
+          pendingEvent.relationshipId,
+          pendingEvent.type,
+          pendingEvent.eventId,
+          pendingEvent.senderDid,
+          delegationId,
+          pendingEvent.requestId,
+        ].join('\t'),
+        sortTime: Number.MAX_SAFE_INTEGER - (events.length - pendingEvent.order),
+      });
+      queuedDelegations.add(delegationId);
+    }
+
+    backlog
+      .sort((a, b) => a.sortTime - b.sortTime)
+      .forEach((item) => lines.push(item.line));
 
     // Idle is the expected common case. Log it and stop.
     if (!lines.length) {
@@ -413,10 +527,18 @@ function main() {
     }
 
     // Cleanup first, recovery second, new work last.
+    // Worker-starting lines respect capacity. If capacity is full, do not mark
+    // the event seen; the next watchdog tick can retry it.
+    let activeWorkers = countActiveWorkers(paths);
     for (const kind of ['DONE', 'STALL', 'NEW']) {
       for (const line of lines.filter((candidate) => candidate.startsWith(`${kind}\t`))) {
+        if (isWorkerLine(line) && activeWorkers >= maxWorkers) {
+          log(`worker capacity full active=${activeWorkers} max=${maxWorkers}; retry next tick line=${line}`);
+          continue;
+        }
         log(`handle ${line}`);
-        handleLine(line, paths, workspace, log);
+        const started = handleLine(line, paths, workspace, log);
+        if (started) activeWorkers += 1;
       }
     }
   });

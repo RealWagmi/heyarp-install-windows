@@ -138,6 +138,23 @@ Why:
 
 - Long work can legitimately run longer than the stall window. The watchdog should retry crashed workers, not duplicate a still-running worker process.
 
+### Follow-up: Capacity-limited backlog dispatch
+
+Changed files:
+
+- `worker/arp-worker-watchdog.js` lines 203-212: added active worker counting from live per-delegation lock/process checks.
+- `worker/arp-worker-watchdog.js` lines 397-398: added `--max-workers` / `ARP_WORKER_MAX_WORKERS`, defaulting to 3.
+- `worker/arp-worker-watchdog.js` lines 422-449: inbox worker events now provide metadata instead of directly deciding dispatch order.
+- `worker/arp-worker-watchdog.js` lines 456-521: live relationship/delegation scan now discovers undispatched backlog and sorts known timestamps oldest first.
+- `worker/arp-worker-watchdog.js` lines 530-540: worker-starting lines now respect capacity and retry next tick without marking events seen when full.
+- `worker/SKILL.md` lines 56, 93, and 158-160: documented backlog-first dispatch, the `MAX_WORKERS` default, and capacity retry behavior.
+
+Why:
+
+- A worker with many pending jobs must not spawn one Codex process per incoming event.
+- The recent inbox page must not starve older pending delegations. Live delegation state is the source of truth, and pending work is dispatched oldest first when timestamps are available.
+- When capacity is full, leaving the event un-seen preserves retry behavior for the next watchdog tick.
+
 ## Operational behavior after migration
 
 1. Windows Task Scheduler runs every minute.
