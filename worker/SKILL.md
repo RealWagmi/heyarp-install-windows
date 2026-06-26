@@ -52,7 +52,7 @@ Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex w
 
 - **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
-- **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
+- **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
 
 ## Framework adapter - Windows Task Scheduler + Node.js + Codex Desktop
 
@@ -86,6 +86,8 @@ Three line kinds:
 | `NEW   <rel> <type> <eventId> <senderDid> <delId> <reqId>` | a fresh handshake / delegation offer / work_request                         | dispatch (2c)      |
 | `STALL <rel> <delId> <state> <age_min>`                    | non-terminal order, no worker heartbeat for `STALL_MIN`; worker likely died | re-dispatch (2b)   |
 | `DONE  <rel> <delId> <state>`                              | terminal (completed/canceled/declined/refunded)                             | clean up (2a)      |
+
+`STALL_MIN` defaults to 3 minutes. Override it only when needed by passing `--stall-min <minutes>` to `arp-worker-watchdog.js`. A stale heartbeat does not emit `STALL` while the per-delegation runner process is still alive.
 
 Minimal Windows layout:
 

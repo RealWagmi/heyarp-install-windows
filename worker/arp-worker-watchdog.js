@@ -350,7 +350,7 @@ function handleLine(line, paths, workspace, log) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
-  const stallMinutes = Number(args['stall-min'] || 5);
+  const stallMinutes = Number(args['stall-min'] || 3);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
@@ -394,7 +394,14 @@ function main() {
           if (dispatched.has(did)) lines.push(['DONE', rel, did, state].join('\t'));
         } else if (dispatched.has(did)) {
           const age = now - dispatched.get(did);
-          if (age > stallSeconds) lines.push(['STALL', rel, did, state, Math.floor(age / 60)].join('\t'));
+          if (age > stallSeconds) {
+            const lockFile = path.join(paths.runsRoot, `${did}.lock`);
+            if (isActiveWorker(lockFile, did)) {
+              log(`heartbeat stale for ${did} age_min=${Math.floor(age / 60)} but runner process is alive; skip STALL`);
+            } else {
+              lines.push(['STALL', rel, did, state, Math.floor(age / 60)].join('\t'));
+            }
+          }
         }
       }
     }

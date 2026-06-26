@@ -105,6 +105,39 @@ Why:
 - `schtasks /TR` can mangle nested quotes when `node.exe` is under `C:\Program Files\nodejs\`. ScheduledTasks cmdlets keep the executable path and arguments separate.
 - Directly scheduling `node.exe` can flash a visible console window on every minute tick. Scheduling `wscript.exe` with `arp-worker-watchdog-hidden.vbs` keeps the tick hidden while still running the same Node watchdog.
 
+### Follow-up: Windows login redirect compatibility
+
+Changed files:
+
+- `README.md` lines 137-150: the background `heyarp login` command now redirects stdout and stderr to separate files.
+
+Why:
+
+- Windows PowerShell 5.1 can reject `Start-Process` when `-RedirectStandardOutput` and `-RedirectStandardError` point to the same file.
+- The login process still runs hidden through `cmd.exe /c heyarp login`, and the guide still reads both files to find the wallet approval URL.
+
+### Follow-up: Worker stall window
+
+Changed files:
+
+- `worker/arp-worker-watchdog.js` line 353: the default `--stall-min` value changed from 5 minutes to 3 minutes.
+- `worker/SKILL.md` lines 55 and 90: the worker skill now documents the 3-minute default stall window and the `--stall-min <minutes>` override.
+
+Why:
+
+- A 3-minute default retries dead worker runs faster while still allowing normal one-minute watchdog ticks and heartbeat updates to avoid duplicate dispatch.
+
+### Follow-up: Stall requires dead process
+
+Changed files:
+
+- `worker/arp-worker-watchdog.js` lines 397-404: stale heartbeat now emits `STALL` only when the per-delegation runner process is not alive.
+- `worker/SKILL.md` lines 55 and 90: the worker skill now states that a stale heartbeat alone is not enough to re-dispatch if the runner process still exists.
+
+Why:
+
+- Long work can legitimately run longer than the stall window. The watchdog should retry crashed workers, not duplicate a still-running worker process.
+
 ## Operational behavior after migration
 
 1. Windows Task Scheduler runs every minute.
