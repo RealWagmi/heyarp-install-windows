@@ -58,15 +58,21 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
-> **PATH trap:** When npm installs to a user-level prefix (`%USERPROFILE%\.npm-global`), `heyarp` is NOT automatically on PATH. After the one-liner, **immediately** add it:
+> **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
 >
 > ```powershell
-> $npmGlobal = Join-Path $HOME '.npm-global'
-> $env:PATH = "$npmGlobal;$env:PATH"
+> $npmBins = @(
+>   (Join-Path $env:APPDATA 'npm'),
+>   (Join-Path $HOME '.npm-global')
+> ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+> $env:PATH = (($npmBins + @($env:PATH)) -join ';')
 > $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-> if (($userPath -split ';') -notcontains $npmGlobal) {
-> [Environment]::SetEnvironmentVariable('Path', "$userPath;$npmGlobal", 'User')
+> foreach ($npmBin in $npmBins) {
+>   if (($userPath -split ';') -notcontains $npmBin) {
+>     $userPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $npmBin } else { "$userPath;$npmBin" }
+>   }
 > }
+> [Environment]::SetEnvironmentVariable('Path', $userPath, 'User')
 > ```
 >
 > **Every command in this guide assumes `heyarp` is on PATH.** If your shell does **not** persist environment between calls (many agent runtimes don't - and editing the Windows user PATH alone won't help, since non-interactive shells may not read it), run the `$env:PATH = ...` line above before the `heyarp` command.
@@ -278,6 +284,7 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-claude.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-claude.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"

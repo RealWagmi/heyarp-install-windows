@@ -53,6 +53,28 @@ function Add-PathForCurrentUser {
     }
 }
 
+function Get-NpmGlobalPrefix {
+    try {
+        $prefix = (& npm config get prefix).Trim()
+        if ($prefix -and $prefix -ne 'undefined') {
+            return $prefix
+        }
+    } catch {
+        return $null
+    }
+}
+
+function Add-NpmGlobalPath {
+    $prefix = Get-NpmGlobalPrefix
+    if (-not $prefix) {
+        return
+    }
+
+    Add-PathForCurrentProcess $prefix
+    Add-PathForCurrentUser $prefix
+    Write-HeyarpInfo "Ensured npm global bin is on PATH: $prefix"
+}
+
 Write-HeyarpInfo '================================================================'
 Write-HeyarpInfo 'HeyARP installer - installs heyarp (@heyanon-arp/cli) + the opengrep L2 engine.'
 Write-HeyarpInfo ''
@@ -104,6 +126,7 @@ try {
 }
 
 if ($installed) {
+    Add-NpmGlobalPath
     Write-HeyarpOk 'heyarp installed.'
 } else {
     Write-HeyarpWarn 'Global install failed. Retrying with a Windows user-level npm prefix.'

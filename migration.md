@@ -54,8 +54,8 @@ Important sections:
 - Line 3: frontmatter description now states Task Scheduler launches a Node.js watchdog.
 - Lines 42-52: core model now shows Task Scheduler -> Node watchdog -> Codex worker run.
 - Lines 54-73: framework adapter now explicitly uses Windows Task Scheduler + Node.js + Codex Desktop.
-- Lines 87-107: minimal installed layout now includes `arp-worker-watchdog.js` and `arp-worker-run-codex.js`.
-- Lines 110-119: Task Scheduler registration now launches `node ...\arp-worker-watchdog.js`.
+- Lines 87-107: minimal installed layout now includes `arp-worker-watchdog.js`, `arp-worker-watchdog-hidden.vbs`, and `arp-worker-run-codex.js`.
+- Lines 110-148: Task Scheduler registration now launches `wscript.exe ...\arp-worker-watchdog-hidden.vbs`, which then runs `node ...\arp-worker-watchdog.js` hidden.
 - Lines 123-140: watchdog responsibilities now describe Node-managed dispatch, state files, logs, and diagnostics.
 - Lines 156-188: dispatch rules remain `DONE -> STALL -> NEW`, preserving the original worker semantics.
 - Lines 190-206: worker-run lifecycle now references `arp-worker-run-codex.js` and its Codex guardrails.
@@ -73,9 +73,10 @@ Updated top-level install guidance so worker installs include the Node scripts.
 Important sections:
 
 - Line 43: worker skill description now says Task Scheduler launches a Node.js watchdog.
-- Lines 283-287: worker install block now downloads:
+- Lines 283-288: worker install block now downloads:
   - `worker/SKILL.md`
   - `worker/arp-worker-watchdog.js`
+  - `worker/arp-worker-watchdog-hidden.vbs`
   - `worker/arp-worker-run-codex.js`
 - Line 294: worker setup note now explains that Task Scheduler launches the Node.js watchdog, which polls and dispatches Codex worker runs.
 
@@ -84,23 +85,44 @@ Why:
 - Without these downloads, users would install only `SKILL.md`; the Task Scheduler command in the worker skill would reference scripts that do not exist.
 - This keeps the README, shipped scripts, and worker skill aligned.
 
+### Follow-up: Windows PATH and Scheduled Task hardening
+
+Updated after live install troubleshooting.
+
+Changed files:
+
+- `README.md` lines 61-75: the PATH trap now adds both `%APPDATA%\npm` and `%USERPROFILE%\.npm-global` when they exist. This covers the normal Windows npm global location and the installer fallback prefix.
+- `install.ps1` lines 56-75 and 128-129: the installer now adds npm's actual global prefix to the current process PATH and Windows user PATH after a normal successful install, not only after the `.npm-global` fallback path.
+- `worker/SKILL.md` lines 19-24: the prerequisite PATH snippet now uses the same two-path logic.
+- `worker/SKILL.md` lines 113-148: watchdog registration now uses PowerShell ScheduledTasks cmdlets instead of `schtasks /Create /TR`, and schedules `wscript.exe` so the watchdog tick is hidden.
+- `worker/SKILL.md` lines 167-181: verification/removal commands now use `Start-ScheduledTask`, `Get-ScheduledTask`, `Get-ScheduledTaskInfo`, and `Unregister-ScheduledTask`.
+- `worker/arp-worker-watchdog-hidden.vbs`: added a hidden launcher so Task Scheduler does not flash a `node.exe` console window every minute.
+
+Why:
+
+- On Windows, a successful normal npm global install can place shims in `%APPDATA%\npm`, not `%USERPROFILE%\.npm-global`.
+- The installer previously added PATH only for the fallback `.npm-global` prefix, so normal successful installs could still leave `heyshield` or other npm shims invisible to later commands.
+- `schtasks /TR` can mangle nested quotes when `node.exe` is under `C:\Program Files\nodejs\`. ScheduledTasks cmdlets keep the executable path and arguments separate.
+- Directly scheduling `node.exe` can flash a visible console window on every minute tick. Scheduling `wscript.exe` with `arp-worker-watchdog-hidden.vbs` keeps the tick hidden while still running the same Node watchdog.
+
 ## Operational behavior after migration
 
 1. Windows Task Scheduler runs every minute.
-2. Task Scheduler launches:
+2. Task Scheduler launches the hidden wrapper:
 
    ```powershell
-   node <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js --workspace <workspace>
+   wscript.exe <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs --workspace <workspace>
    ```
 
-3. The Node watchdog:
+3. The hidden wrapper runs `node <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js --workspace <workspace>` with no visible console window.
+4. The Node watchdog:
    - reads inbox events;
    - health-checks existing delegations;
    - accepts handshakes inline;
    - starts Codex worker runs for new/stalled work;
    - cleans terminal delegations;
    - writes state/logs under `%USERPROFILE%\.heyarp-worker`.
-4. The Node runner:
+5. The Node runner:
    - creates a per-delegation Codex prompt;
    - starts `codex exec`;
    - heartbeats while Codex is alive;

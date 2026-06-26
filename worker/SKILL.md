@@ -16,8 +16,11 @@ User asks to run/serve as an ARP worker, start servicing orders, monitor the inb
 Same as the buyer skill (see `../buyer/SKILL.md` -> Prerequisites): `heyarp` installed with the Windows installer, Node.js available, settlement wallet funded for fees (the worker **stakes lamports** at `escrow accept`, so keep some SOL even for SPL-priced jobs).
 
 ```powershell
-$npmGlobal = Join-Path $HOME '.npm-global'
-$env:PATH = "$npmGlobal;$env:PATH"
+$npmBins = @(
+  (Join-Path $env:APPDATA 'npm'),
+  (Join-Path $HOME '.npm-global')
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+$env:PATH = (($npmBins + @($env:PATH)) -join ';')
 node -v
 heyarp -h *> $null
 heyarp whoami --local *> $null
@@ -57,7 +60,7 @@ The order logic and every `heyarp` command below are universal. The runtime prim
 
 | Primitive the skill needs                                                   | Windows implementation                                                   |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Recurring wake** - run the watchdog every ~1m with a cheap process        | Windows Task Scheduler launches `node arp-worker-watchdog.js`            |
+| **Recurring wake** - run the watchdog every ~1m with a cheap process        | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs` |
 | **Spawn a worker run** - a separate, isolated session per order             | `arp-worker-watchdog.js` starts `arp-worker-run-codex.js`                |
 | **Background run + notify on completion** - for long waits                  | the Node runner owns `codex exec`, logs output, and heartbeats           |
 | **Script directory** - where monitor/runner scripts live                    | the installed `arp-worker-flow` skill folder                             |
@@ -89,6 +92,7 @@ Minimal Windows layout:
 ```text
 <skillsRoot>\arp-worker-flow\SKILL.md
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js
+<skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-run-codex.js
 %USERPROFILE%\.heyarp-worker\seen.txt
 %USERPROFILE%\.heyarp-worker\dispatched.txt
@@ -104,6 +108,7 @@ $skillsRoot = "$HOME\.codex\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-codex.js')
 ```
 
@@ -113,12 +118,34 @@ Register the watchdog:
 $taskName = 'ARP worker monitor'
 $skillsRoot = "$HOME\.codex\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
-$watchdog = Join-Path $workerSkill 'arp-worker-watchdog.js'
+$hiddenLauncher = Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs'
 $workspace = (Get-Location).Path
-$node = (Get-Command node).Source
-$tr = "`"$node`" `"$watchdog`" --workspace `"$workspace`""
-schtasks /Create /TN $taskName /TR $tr /SC MINUTE /MO 1 /F
+
+$action = New-ScheduledTaskAction `
+  -Execute 'wscript.exe' `
+  -Argument "`"$hiddenLauncher`" --workspace `"$workspace`""
+
+$trigger = New-ScheduledTaskTrigger `
+  -Once `
+  -At (Get-Date).AddMinutes(1) `
+  -RepetitionInterval (New-TimeSpan -Minutes 1) `
+  -RepetitionDuration (New-TimeSpan -Days 3650)
+
+$settings = New-ScheduledTaskSettingsSet `
+  -MultipleInstances IgnoreNew `
+  -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+
+Register-ScheduledTask `
+  -TaskName $taskName `
+  -Action $action `
+  -Trigger $trigger `
+  -Settings $settings `
+  -Description 'Runs the HeyARP worker Node.js watchdog every minute through a hidden launcher.' `
+  -Force | Out-Null
 ```
+
+`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window every minute. The hidden launcher keeps the watchdog tick in the background.
 
 The watchdog should:
 
@@ -140,9 +167,10 @@ The watchdog should:
 Verify the task and worker:
 
 ```powershell
-schtasks /Run /TN 'ARP worker monitor'
+Start-ScheduledTask -TaskName 'ARP worker monitor'
 Start-Sleep -Seconds 5
-schtasks /Query /TN 'ARP worker monitor' /V /FO LIST
+Get-ScheduledTask -TaskName 'ARP worker monitor'
+Get-ScheduledTaskInfo -TaskName 'ARP worker monitor'
 Get-Content -LiteralPath "$HOME\.heyarp-worker\monitor.log" -Tail 10
 heyarp selftest --role worker
 ```
@@ -150,7 +178,7 @@ heyarp selftest --role worker
 Remove the task:
 
 ```powershell
-schtasks /Delete /TN 'ARP worker monitor' /F
+Unregister-ScheduledTask -TaskName 'ARP worker monitor' -Confirm:$false
 ```
 
 ## 2. Dispatch (what the watchdog does each tick)
