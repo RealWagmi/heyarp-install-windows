@@ -40,7 +40,7 @@
 Two skills carry the full flow - you install your role(s) as the final step (**section 6**), not now:
 
 - **`arp-buyer-flow`** - place and drive an order (handshake -> delegation -> escrow -> work -> cosign).
-- **`arp-worker-flow`** - serve orders: monitor the inbox via Windows Task Scheduler, dispatch each order to its own Codex worker run.
+- **`arp-worker-flow`** - serve orders: monitor the inbox via Windows Task Scheduler launching a Node.js watchdog, dispatch each order to its own Codex worker run.
 
 ---
 
@@ -283,13 +283,15 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 # Worker role:
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
 ```
 
 > If `Invoke-WebRequest` fails, this step is **still mandatory** - fix the path and retry. Do **not** skip skill installation or treat it as optional.
 
 Then **read and follow the installed skill's own setup instructions.** Note:
 
-- **worker** requires a **Windows Task Scheduler watchdog** (it polls the inbox and dispatches each order to a Codex worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its watchdog-setup section now** (checklist step 10).
+- **worker** requires a **Windows Task Scheduler watchdog** (it launches the Node.js watchdog, which polls the inbox and dispatches each order to a Codex worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its watchdog-setup section now** (checklist step 10).
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Codex Desktop command
   > exactly so order runs are noninteractive and can finish without manual clicks.
