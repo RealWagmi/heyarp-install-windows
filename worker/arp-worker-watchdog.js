@@ -199,7 +199,7 @@ function isActiveWorker(lockFile, delegationId) {
   const pid = Number(lock.fields && lock.fields.pid);
   if (!pid || pid === process.pid) return false;
   const commandLine = getProcessCommandLine(pid);
-  return commandLine.includes('arp-worker-run-codex.js') && commandLine.includes(delegationId);
+  return commandLine.includes('arp-worker-run-claude.js') && commandLine.includes(delegationId);
 }
 
 // Count live per-delegation worker runners by checking lock files against real processes.
@@ -271,7 +271,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
 function startWorkerRun(context, paths, workspace, log) {
   if (!context.delegationId) throw new Error('cannot start worker run without delegationId');
 
-  const runnerPath = path.join(__dirname, 'arp-worker-run-codex.js');
+  const runnerPath = path.join(__dirname, 'arp-worker-run-claude.js');
   if (!fs.existsSync(runnerPath)) throw new Error(`runner script missing at ${runnerPath}`);
 
   const lockFile = path.join(paths.runsRoot, `${context.delegationId}.lock`);
