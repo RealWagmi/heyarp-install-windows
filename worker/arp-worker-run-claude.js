@@ -130,7 +130,7 @@ function main() {
     '--dangerously-skip-permissions',
     '--output-format', 'text',
     '--no-session-persistence',
-    '-m', 'claude-sonnet-4-6',
+    '--model', 'claude-sonnet-4-6',
   ];
 
   // stdout/stderr are inherited: the watchdog already opened them as log files
