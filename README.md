@@ -131,6 +131,7 @@ heyarp config set rpcUrl https://api.devnet.solana.com
 > 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
 > 2. **Do NOT pass a server URL** - it was set in section 2 (`config set server`), so `heyarp login` uses it. Never ask the user for it. (If your build _requires_ `--server`, use the exact section 2 value.)
 > 3. **Read the URL from the file, paste it to the user**, then **WAIT** for them to approve. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
+> 4. Wallet approval only works while `heyarp login` is still running. If it exits before approval, run `heyarp login` again and approve the new URL.
 
 
 ```powershell
