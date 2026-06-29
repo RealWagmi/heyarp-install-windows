@@ -1,6 +1,7 @@
 param(
     [string]$HeyarpInstallTag = $env:HEYARP_INSTALL_TAG,
-    [string]$GuideUrl = $(if ($env:HEYARP_GUIDE_URL) { $env:HEYARP_GUIDE_URL } else { 'https://github.com/RealWagmi/heyarp-install-windows#readme' }),
+    [string]$GuideUrl = $(if ($env:HEYARP_GUIDE_URL) { $env:HEYARP_GUIDE_URL } else { 'https://github.com/RealWagmi/heyarp-install-windows/tree/hermes#readme' }),
+    [string]$HermesInstallSkillUrl = $(if ($env:HEYARP_HERMES_INSTALL_SKILL_URL) { $env:HEYARP_HERMES_INSTALL_SKILL_URL } else { 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/heyarp-install-windows/SKILL.md' }),
     [switch]$SkipOpengrepInstall,
     [switch]$RequireOpengrep
 )
@@ -75,6 +76,32 @@ function Add-NpmGlobalPath {
     Write-HeyarpInfo "Ensured npm global bin is on PATH: $prefix"
 }
 
+function Install-HermesInstallSkill {
+    if (-not $env:LOCALAPPDATA) {
+        Write-HeyarpWarn 'LOCALAPPDATA is not set; skipping Hermes install skill.'
+        return
+    }
+
+    $skillsRoot = Join-Path $env:LOCALAPPDATA 'hermes\skills'
+    $skillDir = Join-Path $skillsRoot 'heyarp-install-windows'
+    $skillFile = Join-Path $skillDir 'SKILL.md'
+
+    try {
+        New-Item -ItemType Directory -Force -Path $skillDir | Out-Null
+
+        $localSkill = Join-Path $PSScriptRoot 'heyarp-install-windows\SKILL.md'
+        if ($PSScriptRoot -and (Test-Path -LiteralPath $localSkill)) {
+            Copy-Item -LiteralPath $localSkill -Destination $skillFile -Force
+        } else {
+            Invoke-WebRequest -UseBasicParsing $HermesInstallSkillUrl -OutFile $skillFile
+        }
+
+        Write-HeyarpOk "Installed Hermes skill: $skillFile"
+    } catch {
+        Write-HeyarpWarn "Could not install Hermes skill heyarp-install-windows: $($_.Exception.Message)"
+    }
+}
+
 Write-HeyarpInfo '================================================================'
 Write-HeyarpInfo 'HeyARP installer - installs heyarp (@heyanon-arp/cli) + the opengrep L2 engine.'
 Write-HeyarpInfo ''
@@ -88,6 +115,8 @@ Write-HeyarpInfo 'ALLOW SEVERAL MINUTES: the opengrep L2 engine is a ~40 MB down
 Write-HeyarpInfo 'Run this installer with a command timeout of >= 10 min.'
 Write-HeyarpInfo '================================================================'
 Write-Host ''
+
+Install-HermesInstallSkill
 
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     Write-HeyarpError 'Node.js >= 22 is required and was not found. Install it from https://nodejs.org and re-run.'
@@ -188,6 +217,7 @@ Write-HeyarpOk 'Installation complete. Verify with: heyarp -h'
 Write-Host ''
 Write-HeyarpInfo '================================================================'
 Write-HeyarpInfo 'NEXT - DO NOT STOP HERE. Proceed straight to SETUP NOW, in this session.'
+Write-HeyarpInfo '  If you are Hermes, use the installed skill: heyarp-install-windows.'
 Write-HeyarpInfo '  Open the ONBOARDING GUIDE and execute Part 1 (SETUP) step by step.'
 Write-HeyarpInfo "    $GuideUrl"
 Write-HeyarpInfo ''
