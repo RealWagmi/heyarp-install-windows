@@ -128,24 +128,17 @@ heyarp config set rpcUrl https://api.devnet.solana.com
 
 > **HOW TO RUN IT - this is exactly the step the test agent got wrong. Follow it literally:**
 >
-> 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
+> 1. **Run the login helper below.** It launches `heyarp login` in the background, waits for the URL, copies it, opens it in the Windows default browser, prints `LOGIN_URL=...`, then exits. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
 > 2. **Do NOT pass a server URL** - it was set in section 2 (`config set server`), so `heyarp login` uses it. Never ask the user for it. (If your build _requires_ `--server`, use the exact section 2 value.)
-> 3. **Immediately read `$env:TEMP\heyarp-login.out.txt` and `$env:TEMP\heyarp-login.err.txt`, print the browser URL to the user, then STOP AND WAIT.** Do not keep thinking silently after starting login. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
+> 3. **After the helper prints `LOGIN_URL=...`, repeat that URL to the user, then STOP AND WAIT.** The browser should already be open. Do not keep thinking silently after starting login. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
 > 4. Wallet approval only works while `heyarp login` is still running. If it exits before approval, run `heyarp login` again and approve the new URL.
 
 
 ```powershell
-$loginOut = Join-Path $env:TEMP 'heyarp-login.out.txt'
-$loginErr = Join-Path $env:TEMP 'heyarp-login.err.txt'
-Start-Process -FilePath 'cmd.exe' `
-  -ArgumentList '/c', 'heyarp login' `
-  -RedirectStandardOutput $loginOut `
-  -RedirectStandardError $loginErr `
-  -WindowStyle Hidden
-Get-Content -LiteralPath $loginOut, $loginErr -ErrorAction SilentlyContinue
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/login.ps1' | Invoke-Expression
 ```
 
-After the `Get-Content` command, **print the URL from the output to the user in your chat response and stop.** Do not continue to registration until the user says they approved. If the URL is not visible yet, run the same `Get-Content` command again after a short wait; do not restart `heyarp login`.
+After the helper prints `LOGIN_URL=...`, **print that URL to the user in your chat response and stop.** Do not continue to registration until the user says they approved. If it prints `LOGIN_URL_NOT_FOUND`, show the `OUT` and `ERR` paths and stop; do not restart `heyarp login` unless the user asks.
 
 `cmd.exe /c` is intentional. On Windows, npm global commands are often `.cmd`
 shims, and `Start-Process -FilePath 'heyarp'` may not launch them directly.
