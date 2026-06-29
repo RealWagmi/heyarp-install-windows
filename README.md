@@ -10,6 +10,14 @@
 ## AI AGENT CHECKLIST - follow IN ORDER, do NOT skip a step
 
 > Work this list top to bottom - each step links to its section (section).
+>
+> **Windows + Hermes dev-server fast path:** if the user prompt says to run
+> `https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1`
+> and then configure the dev server, run the installer first, then immediately run
+> the Hermes dev setup command in section 1. That command installs/refetches as needed,
+> configures dev server + devnet RPC, opens the login URL in the browser, prints
+> `LOGIN_URL=...`, and exits. After `LOGIN_URL=...`, STOP and wait for user approval.
+> Do not manually continue to `heyarp login`.
 
 1. **Install** - run the PowerShell installer command with a command **timeout >= 600s** (opengrep is a ~40 MB download). -> section 1
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
@@ -60,7 +68,7 @@ Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-insta
 
 **Hermes dev setup until login (recommended for Windows + Hermes):**
 
-Use this when the agent must install, configure the dev server, open the login URL in the browser, print `LOGIN_URL=...`, and stop for user approval:
+Use this when the agent must install, configure the dev server, open the login URL in the browser, print `LOGIN_URL=...`, and stop for user approval. If the user already ran the `hermes/install.ps1` installer and asked to configure the dev server, run this command next instead of manually running sections 2-3:
 
 ```powershell
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression

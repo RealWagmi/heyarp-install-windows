@@ -1,6 +1,6 @@
 param(
     [string]$HeyarpInstallTag = $env:HEYARP_INSTALL_TAG,
-    [string]$GuideUrl = $(if ($env:HEYARP_GUIDE_URL) { $env:HEYARP_GUIDE_URL } else { 'https://github.com/RealWagmi/heyarp-install-windows#readme' }),
+    [string]$GuideUrl = $(if ($env:HEYARP_GUIDE_URL) { $env:HEYARP_GUIDE_URL } else { 'https://github.com/RealWagmi/heyarp-install-windows/tree/hermes#readme' }),
     [switch]$SkipOpengrepInstall,
     [switch]$RequireOpengrep
 )
