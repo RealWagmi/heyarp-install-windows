@@ -38,6 +38,30 @@ try {
 
 Start-Process $url
 
+try {
+    Add-Type -AssemblyName System.Windows.Forms
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.TopMost = $true
+    $owner.StartPosition = 'CenterScreen'
+    $owner.Size = New-Object System.Drawing.Size(1, 1)
+    $owner.ShowInTaskbar = $false
+    $owner.Opacity = 0
+    $owner.Show()
+    $owner.Activate()
+
+    [System.Windows.Forms.MessageBox]::Show(
+        $owner,
+        "HeyARP login opened in your browser.`r`n`r`nIf you do not see it, check your taskbar or browser window.`r`n`r`nThe login URL was copied to clipboard.",
+        'HeyARP Login',
+        [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Information
+    ) | Out-Null
+    $owner.Close()
+    $owner.Dispose()
+} catch {
+    Write-Warning "Could not show login popup: $($_.Exception.Message)"
+}
+
 Write-Host "LOGIN_URL=$url"
 Write-Host "LOGIN_PID=$($process.Id)"
 Write-Host "Opened browser with the login URL and copied it to clipboard."
