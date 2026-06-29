@@ -203,7 +203,7 @@ function isActiveWorker(lockFile, delegationId) {
 }
 
 // Count live per-delegation worker runners by checking lock files against real processes.
-// Capacity checks use this so one busy machine does not spawn too many Codex workers.
+// Capacity checks use this so one busy machine does not spawn too many Claude Code workers.
 function countActiveWorkers(paths) {
   if (!fs.existsSync(paths.runsRoot)) return 0;
   let count = 0;
@@ -265,7 +265,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
 }
 
 // Start one real worker run for one delegation.
-// This does not do the ARP work itself. It starts arp-worker-run-codex.js,
+// This does not do the ARP work itself. It starts arp-worker-run-claude.js,
 // writes logs, creates a lock, verifies the process stayed alive, then records
 // the delegation as dispatched.
 function startWorkerRun(context, paths, workspace, log) {
@@ -374,7 +374,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
   };
 
   if (context.type === 'handshake') {
-    // Handshakes are cheap and do not need a Codex worker run.
+    // Handshakes are cheap and do not need a Claude Code worker run.
     const result = runShell('heyarp', withFromDid([
       'send-handshake-response',
       context.senderDid,
