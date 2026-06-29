@@ -199,11 +199,11 @@ function isActiveWorker(lockFile, delegationId) {
   const pid = Number(lock.fields && lock.fields.pid);
   if (!pid || pid === process.pid) return false;
   const commandLine = getProcessCommandLine(pid);
-  return commandLine.includes('arp-worker-run-codex.js') && commandLine.includes(delegationId);
+  return commandLine.includes('arp-worker-run-') && commandLine.includes(delegationId);
 }
 
 // Count live per-delegation worker runners by checking lock files against real processes.
-// Capacity checks use this so one busy machine does not spawn too many Codex workers.
+// Capacity checks use this so one busy machine does not spawn too many Hermes workers.
 function countActiveWorkers(paths) {
   if (!fs.existsSync(paths.runsRoot)) return 0;
   let count = 0;
@@ -265,13 +265,13 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
 }
 
 // Start one real worker run for one delegation.
-// This does not do the ARP work itself. It starts arp-worker-run-codex.js,
+// This does not do the ARP work itself. It starts arp-worker-run-hermes.js,
 // writes logs, creates a lock, verifies the process stayed alive, then records
 // the delegation as dispatched.
 function startWorkerRun(context, paths, workspace, log) {
   if (!context.delegationId) throw new Error('cannot start worker run without delegationId');
 
-  const runnerPath = path.join(__dirname, 'arp-worker-run-codex.js');
+  const runnerPath = path.join(__dirname, 'arp-worker-run-hermes.js');
   if (!fs.existsSync(runnerPath)) throw new Error(`runner script missing at ${runnerPath}`);
 
   const lockFile = path.join(paths.runsRoot, `${context.delegationId}.lock`);
@@ -301,7 +301,7 @@ function startWorkerRun(context, paths, workspace, log) {
   const outFd = fs.openSync(stdoutLog, 'a');
   const errFd = fs.openSync(stderrLog, 'a');
   const workerArgs = buildWorkerArgs(context, paths, workspace, runnerPath);
-  dispatch(`starting worker run relationship=${context.relationshipId} delegation=${context.delegationId} runner=${runnerPath}`);
+  dispatch(`starting Hermes worker run relationship=${context.relationshipId} delegation=${context.delegationId} runner=${runnerPath}`);
 
   const child = spawn(process.execPath, workerArgs, {
     detached: true,
@@ -374,7 +374,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
   };
 
   if (context.type === 'handshake') {
-    // Handshakes are cheap and do not need a Codex worker run.
+    // Handshakes are cheap and do not need a Hermes worker run.
     const result = runShell('heyarp', withFromDid([
       'send-handshake-response',
       context.senderDid,
