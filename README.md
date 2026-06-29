@@ -72,7 +72,7 @@ This helper automates sections 1-3 up to login approval: install/refetch as need
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/start-hermes.ps1' | Invoke-Expression
 ```
 
-The launcher auto-detects Git Bash, sets `HERMES_GIT_BASH_PATH` and `TERMINAL_ENV=local`, then runs `hermes chat --tui -t terminal,file,skills --yolo` from the current directory. If Git Bash is missing, install Git for Windows from [git-scm.com/download/win](https://git-scm.com/download/win).
+The launcher auto-detects Git Bash, sets `HERMES_GIT_BASH_PATH` and `TERMINAL_ENV=local`, creates `%USERPROFILE%\heyarp-work` if needed, then runs `hermes chat --tui -t terminal,file,skills --yolo` from that workspace. This keeps ARP order deliverables out of the installer repository. To use a specific project folder, run the launcher with `-Path <folder>`. If Git Bash is missing, install Git for Windows from [git-scm.com/download/win](https://git-scm.com/download/win).
 
 ```powershell
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression

@@ -1,5 +1,5 @@
 param(
-    [string]$Path = (Get-Location).Path,
+    [string]$Path = (Join-Path $HOME 'heyarp-work'),
     [string]$Model,
     [string]$Provider,
     [switch]$NoYolo,
@@ -23,6 +23,12 @@ param(
 #
 # Git Bash is not required by HeyARP itself. It is used here only to make
 # Hermes command execution work reliably on Windows.
+#
+# The default Hermes workspace is %USERPROFILE%\heyarp-work instead of this
+# installer repository. ARP order deliverables are normal workspace files, so
+# launching Hermes from the installer repo can leave files such as hello.js or
+# heyarp-response-*.json beside install.ps1. Pass -Path when you intentionally
+# want Hermes to work in a specific project folder.
 
 $ErrorActionPreference = 'Stop'
 
@@ -58,8 +64,12 @@ if (-not $gitBash) {
     throw 'Git Bash was not found. Install Git for Windows from https://git-scm.com/download/win, then rerun this launcher.'
 }
 
+if (-not (Test-Path -LiteralPath $Path)) {
+    New-Item -ItemType Directory -Force -Path $Path | Out-Null
+}
+
 if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-    throw "Path does not exist or is not a directory: $Path"
+    throw "Path is not a directory: $Path"
 }
 
 $env:HERMES_GIT_BASH_PATH = $gitBash
