@@ -58,6 +58,16 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
+**Hermes dev setup until login (recommended for Windows + Hermes):**
+
+Use this when the agent must install, configure the dev server, open the login URL in the browser, print `LOGIN_URL=...`, and stop for user approval:
+
+```powershell
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression
+```
+
+After this command prints `LOGIN_URL=...`, stop and wait for the user to approve in the browser. Continue this guide only after the user says login was approved.
+
 > **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
 >
 > ```powershell
