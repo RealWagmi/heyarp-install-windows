@@ -66,6 +66,14 @@ Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-insta
 
 This helper automates sections 1-3 up to login approval: install/refetch as needed, set the section 2 dev values, open the login URL in the Windows default browser, print `LOGIN_URL=...`, and stop for user approval. It is a convenience helper, not a different meaning of "dev server".
 
+**Start Hermes on Windows with terminal tools enabled:**
+
+```powershell
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/start-hermes.ps1' | Invoke-Expression
+```
+
+The launcher auto-detects Git Bash, sets `HERMES_GIT_BASH_PATH` and `TERMINAL_ENV=local`, then runs `hermes chat --tui -t terminal,file,skills --yolo` from the current directory. If Git Bash is missing, install Git for Windows from [git-scm.com/download/win](https://git-scm.com/download/win).
+
 ```powershell
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression
 ```
