@@ -30,7 +30,7 @@ heyarp selftest --role worker
 If `heyarp` is missing:
 
 ```powershell
-Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1' | Invoke-Expression
 ```
 
 If `heyarp selftest` reports `opengrep` missing on Windows even though `opengrep.exe` exists, create an extensionless copy for the checker:
@@ -114,9 +114,9 @@ If the scripts are missing from the installed skill folder, fetch them:
 $skillsRoot = "$env:LOCALAPPDATA\hermes\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-hermes.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-hermes.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-run-hermes.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-hermes.js')
 ```
 
 Register the watchdog:

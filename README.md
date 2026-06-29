@@ -59,7 +59,7 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 **Recommended PowerShell one-liner (installs heyarp + the opengrep engine in one step):**
 
 ```powershell
-Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1' | Invoke-Expression
 ```
 
 **Hermes automation helper until login (recommended for Windows + Hermes):**
@@ -300,14 +300,14 @@ $skillsRoot = "$env:LOCALAPPDATA\hermes\skills"
 
 # Buyer role:
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-buyer-flow" | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/buyer/SKILL.md' -OutFile "$skillsRoot\arp-buyer-flow\SKILL.md"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/buyer/SKILL.md' -OutFile "$skillsRoot\arp-buyer-flow\SKILL.md"
 
 # Worker role:
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"
 ```
 
 > If `Invoke-WebRequest` fails, this step is **still mandatory** - fix the path and retry. Do **not** skip skill installation or treat it as optional.
