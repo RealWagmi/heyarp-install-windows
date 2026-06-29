@@ -66,6 +66,14 @@ Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-insta
 
 This helper automates sections 1-3 up to login approval: install/refetch as needed, set the section 2 dev values, open the login URL in the Windows default browser, print `LOGIN_URL=...`, and stop for user approval. It is a convenience helper, not a different meaning of "dev server".
 
+If you are running inside this checked-out repository, use the local helper:
+
+```powershell
+.\setup-dev-until-login.ps1
+```
+
+Only use the raw GitHub helper when you are not already inside the repository:
+
 ```powershell
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression
 ```
