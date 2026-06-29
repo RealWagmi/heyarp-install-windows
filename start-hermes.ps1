@@ -6,6 +6,24 @@ param(
     [switch]$DryRun
 )
 
+# Hermes terminal tools expect a Unix-style shell such as bash/sh/zsh.
+# On Linux/macOS that shell is normally available at paths like /bin/bash.
+# A normal Windows install does not have /bin/bash; Windows shells are
+# powershell.exe and cmd.exe. Without a Windows bash path, Hermes can fail
+# before a command runs with an error like:
+#   execvpe(/bin/bash) failed: No such file or directory
+#
+# Git for Windows installs Git Bash, usually at:
+#   C:\Program Files\Git\bin\bash.exe
+#
+# This launcher points Hermes at Git Bash via HERMES_GIT_BASH_PATH and uses
+# TERMINAL_ENV=local. Hermes then has a working shell bridge on Windows and
+# can run Windows commands through it, including:
+#   powershell.exe -NoProfile ...
+#
+# Git Bash is not required by HeyARP itself. It is used here only to make
+# Hermes command execution work reliably on Windows.
+
 $ErrorActionPreference = 'Stop'
 
 function Find-GitBash {
