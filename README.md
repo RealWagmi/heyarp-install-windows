@@ -128,24 +128,43 @@ heyarp config set rpcUrl https://api.devnet.solana.com
 
 > **HOW TO RUN IT - this is exactly the step the test agent got wrong. Follow it literally:**
 >
-> 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
+> 1. **Launch login in the background** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
 > 2. **Do NOT pass a server URL** - it was set in section 2 (`config set server`), so `heyarp login` uses it. Never ask the user for it. (If your build _requires_ `--server`, use the exact section 2 value.)
-> 3. **Immediately read `$env:TEMP\heyarp-login.out.txt` and `$env:TEMP\heyarp-login.err.txt`, print the browser URL to the user, then STOP AND WAIT.** Do not keep thinking silently after starting login. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
+> 3. **Extract the URL with the fast polling block below, print `LOGIN_URL=...` to the user, then STOP AND WAIT.** The terminal command must exit after printing the URL while the background login process keeps running. Do not keep thinking silently after starting login. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
 > 4. Wallet approval only works while `heyarp login` is still running. If it exits before approval, run `heyarp login` again and approve the new URL.
 
 
 ```powershell
 $loginOut = Join-Path $env:TEMP 'heyarp-login.out.txt'
 $loginErr = Join-Path $env:TEMP 'heyarp-login.err.txt'
+Remove-Item -LiteralPath $loginOut, $loginErr -ErrorAction SilentlyContinue
 Start-Process -FilePath 'cmd.exe' `
   -ArgumentList '/c', 'heyarp login' `
   -RedirectStandardOutput $loginOut `
   -RedirectStandardError $loginErr `
   -WindowStyle Hidden
-Get-Content -LiteralPath $loginOut, $loginErr -ErrorAction SilentlyContinue
+
+$url = $null
+for ($i = 0; $i -lt 30; $i++) {
+  Start-Sleep -Seconds 1
+  $text = Get-Content -LiteralPath $loginOut, $loginErr -ErrorAction SilentlyContinue -Raw
+  $url = [regex]::Match($text, 'https?://\S+').Value
+  if ($url) { break }
+}
+
+if ($url) {
+  Set-Clipboard $url
+  Start-Process $url
+  "LOGIN_URL=$url"
+  "Opened browser and copied URL to clipboard. Stop and wait for user approval."
+} else {
+  "LOGIN_URL_NOT_FOUND"
+  "OUT=$loginOut"
+  "ERR=$loginErr"
+}
 ```
 
-After the `Get-Content` command, **print the URL from the output to the user in your chat response and stop.** Do not continue to registration until the user says they approved. If the URL is not visible yet, run the same `Get-Content` command again after a short wait; do not restart `heyarp login`.
+After this command prints `LOGIN_URL=...`, **repeat that URL to the user in your chat response and stop.** The browser should already be open and the URL should already be copied to the clipboard. Do not continue to registration until the user says they approved. If it prints `LOGIN_URL_NOT_FOUND`, show the `OUT` and `ERR` paths and stop; do not restart `heyarp login` unless the user asks.
 
 `cmd.exe /c` is intentional. On Windows, npm global commands are often `.cmd`
 shims, and `Start-Process -FilePath 'heyarp'` may not launch them directly.
