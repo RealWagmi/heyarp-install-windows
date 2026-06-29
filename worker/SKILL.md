@@ -113,9 +113,9 @@ If the scripts are missing from the installed skill folder, fetch them:
 $skillsRoot = "$HOME\.codex\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-codex.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-codex.js')
 ```
 
 Register the watchdog:
@@ -262,14 +262,6 @@ Codex Desktop worker-run guardrails:
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - When the cycle reaches terminal state, remove every line for that delegation ID from `dispatched.txt`.
-
-TODO: implement the placeholder runtime adapters for non-Codex agents. The Node watchdog is intended to stay shared, but the worker runner currently uses `arp-worker-run-codex.js`. Placeholder files already exist for Claude Code, Hermes, and OpenClaw:
-
-- `arp-worker-run-claude.js`
-- `arp-worker-run-hermes.js`
-- `arp-worker-run-openclaw.js`
-
-Each adapter must accept the same context arguments as `arp-worker-run-codex.js`, create the same prompt, heartbeat to `dispatched.txt`, write the same logs/final output files, and remove the per-delegation lock on exit.
 
 Debug a stuck delegation in this order:
 

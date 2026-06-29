@@ -267,9 +267,7 @@ codex exec --help
 
 ### 6b. Install the skill(s)
 
-Fetch **only the chosen role(s)**. Use the actual agent runtime's skills folder.
-
-On Windows, use the actual agent runtime's skills folder. Codex Desktop usually reads `%USERPROFILE%\.codex\skills`; Claude Desktop/Claude Code usually reads `%USERPROFILE%\.claude\skills`. Install into the runtime you will use, not both by default.
+Fetch **only the chosen role(s)**. On Windows, install the skills into Codex Desktop's skills folder, usually `%USERPROFILE%\.codex\skills`.
 
 > **"Both" roles with ONE agent - do NOT register a second agent.**
 >
@@ -280,23 +278,18 @@ On Windows, use the actual agent runtime's skills folder. Codex Desktop usually 
 > The same rule applies to `--from-did`: it's only needed when multiple agents share one `agents.json`. With a single agent, `heyarp` auto-resolves - no `--from-did` anywhere.
 
 ```powershell
-# Pick the runtime you will use:
 $skillsRoot = "$HOME\.codex\skills"
-# $skillsRoot = "$HOME\.claude\skills"
 
 # Buyer role:
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-buyer-flow" | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/buyer/SKILL.md' -OutFile "$skillsRoot\arp-buyer-flow\SKILL.md"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/buyer/SKILL.md' -OutFile "$skillsRoot\arp-buyer-flow\SKILL.md"
 
 # Worker role:
 New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Null
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-claude.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-claude.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/worker/arp-worker-run-openclaw.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-openclaw.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
 ```
 
 > If `Invoke-WebRequest` fails, this step is **still mandatory** - fix the path and retry. Do **not** skip skill installation or treat it as optional.
