@@ -11,13 +11,9 @@
 
 > Work this list top to bottom - each step links to its section (section).
 >
-> **Windows + Hermes dev-server fast path:** if the user prompt says to run
-> `https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1`
-> and then configure the dev server, run the installer first, then immediately run
-> the Hermes dev setup command in section 1. That command installs/refetches as needed,
-> configures dev server + devnet RPC, opens the login URL in the browser, prints
-> `LOGIN_URL=...`, and exits. After `LOGIN_URL=...`, STOP and wait for user approval.
-> Do not manually continue to `heyarp login`.
+>
+> **Dev server means only this:** use the ARP dev API and Solana devnet RPC from
+> section 2. It does **not** mean starting `npm`, `yarn`, `pnpm`, or any web dev server.
 
 1. **Install** - run the PowerShell installer command with a command **timeout >= 600s** (opengrep is a ~40 MB download). -> section 1
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
@@ -66,9 +62,9 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
 ```
 
-**Hermes dev setup until login (recommended for Windows + Hermes):**
+**Hermes automation helper until login (recommended for Windows + Hermes):**
 
-Use this when the agent must install, configure the dev server, open the login URL in the browser, print `LOGIN_URL=...`, and stop for user approval. If the user already ran the `hermes/install.ps1` installer and asked to configure the dev server, run this command next instead of manually running sections 2-3:
+This helper automates sections 1-3 up to login approval: install/refetch as needed, set the section 2 dev values, open the login URL in the Windows default browser, print `LOGIN_URL=...`, and stop for user approval. It is a convenience helper, not a different meaning of "dev server".
 
 ```powershell
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/setup-dev-until-login.ps1' | Invoke-Expression
