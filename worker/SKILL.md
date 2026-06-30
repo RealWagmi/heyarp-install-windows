@@ -30,7 +30,7 @@ heyarp selftest --role worker
 If `heyarp` is missing:
 
 ```powershell
-Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/install.ps1' | Invoke-Expression
 ```
 
 If `heyarp selftest` reports `opengrep` missing on Windows even though `opengrep.exe` exists, create an extensionless copy for the checker:
