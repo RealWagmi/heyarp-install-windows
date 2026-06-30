@@ -55,7 +55,7 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 **Recommended PowerShell one-liner (installs heyarp + the opengrep engine in one step):**
 
 ```powershell
-Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/install.ps1' | Invoke-Expression
 ```
 
 > **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
