@@ -25,7 +25,7 @@ heyarp whoami --local *> $null  # agent registered?
 If not installed, run the installer:
 
 ```powershell
-Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/main/install.ps1' | Invoke-Expression
+Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/install.ps1' | Invoke-Expression
 ```
 
 Windows notes:

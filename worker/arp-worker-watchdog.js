@@ -199,11 +199,11 @@ function isActiveWorker(lockFile, delegationId) {
   const pid = Number(lock.fields && lock.fields.pid);
   if (!pid || pid === process.pid) return false;
   const commandLine = getProcessCommandLine(pid);
-  return commandLine.includes('arp-worker-run-codex.js') && commandLine.includes(delegationId);
+  return /arp-worker-run-[A-Za-z0-9_-]+\.js/.test(commandLine) && commandLine.includes(delegationId);
 }
 
 // Count live per-delegation worker runners by checking lock files against real processes.
-// Capacity checks use this so one busy machine does not spawn too many Codex workers.
+// Capacity checks use this so one busy machine does not spawn too many agent workers.
 function countActiveWorkers(paths) {
   if (!fs.existsSync(paths.runsRoot)) return 0;
   let count = 0;
@@ -264,14 +264,25 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   return workerArgs;
 }
 
+function resolveRunnerPath(args) {
+  const runner = String(args.runner || process.env.ARP_WORKER_RUNNER || 'openclaw').toLowerCase();
+  const runnerNames = new Set(['openclaw']);
+  if (!runnerNames.has(runner)) {
+    throw new Error(`unsupported worker runner '${runner}'. Supported runner: openclaw`);
+  }
+  return {
+    runner,
+    runnerPath: path.join(__dirname, `arp-worker-run-${runner}.js`),
+  };
+}
+
 // Start one real worker run for one delegation.
-// This does not do the ARP work itself. It starts arp-worker-run-codex.js,
+// This does not do the ARP work itself. It starts the configured runner,
 // writes logs, creates a lock, verifies the process stayed alive, then records
 // the delegation as dispatched.
-function startWorkerRun(context, paths, workspace, log) {
+function startWorkerRun(context, paths, workspace, log, runnerPath) {
   if (!context.delegationId) throw new Error('cannot start worker run without delegationId');
 
-  const runnerPath = path.join(__dirname, 'arp-worker-run-codex.js');
   if (!fs.existsSync(runnerPath)) throw new Error(`runner script missing at ${runnerPath}`);
 
   const lockFile = path.join(paths.runsRoot, `${context.delegationId}.lock`);
@@ -342,7 +353,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // Handle one normalized watchdog line.
 // DONE cleans tracking, STALL starts a replacement worker, NEW either accepts
 // a handshake inline or starts a new worker run.
-function handleLine(line, paths, workspace, log, fromDid) {
+function handleLine(line, paths, workspace, log, fromDid, runnerPath) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -358,7 +369,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
       relationshipId: parts[1],
       delegationId: parts[2],
       fromDid,
-    }, paths, workspace, log);
+    }, paths, workspace, log, runnerPath);
   }
 
   if (kind !== 'NEW') return false;
@@ -374,7 +385,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
   };
 
   if (context.type === 'handshake') {
-    // Handshakes are cheap and do not need a Codex worker run.
+    // Handshakes are cheap and do not need a full worker run.
     const result = runShell('heyarp', withFromDid([
       'send-handshake-response',
       context.senderDid,
@@ -389,7 +400,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
     return false;
   }
 
-  return startWorkerRun(context, paths, workspace, log);
+  return startWorkerRun(context, paths, workspace, log, runnerPath);
 }
 
 // Main scheduled tick:
@@ -404,9 +415,11 @@ function main() {
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
   const maxWorkers = parseNonNegativeNumber(args['max-workers'] || process.env.ARP_WORKER_MAX_WORKERS, 3);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
+  const { runner, runnerPath } = resolveRunnerPath(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
+  log(`runner=${runner} runnerPath=${runnerPath}`);
 
   withMonitorLock(paths, () => {
     // seen.txt prevents processing the same inbox event twice.
@@ -545,7 +558,7 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log, fromDid);
+        const started = handleLine(line, paths, workspace, log, fromDid, runnerPath);
         if (started) activeWorkers += 1;
       }
     }
