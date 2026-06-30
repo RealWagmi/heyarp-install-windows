@@ -200,25 +200,54 @@ heyarp whoami --local   # --local = read keys from local disk (works before the 
 
 ### Fund it:
 
-Devnet faucets require a browser (they use Cloudflare + wallet connection and cannot be accessed via CLI).
+For readiness, prefer `heyarp selftest`; it uses the CLI's current required funding threshold.
+
+```powershell
+heyarp selftest --role worker
+```
+
+If `selftest` says the settlement wallet is under the required balance, fund the shown settlement address and run the same command again.
+
+### Devnet funding:
+
+Devnet faucets require a browser. They use Cloudflare + wallet connection and cannot be accessed reliably via CLI.
 **Tell the user to open this link and paste their settlement address:**
 
  **[faucet.solana.com](https://faucet.solana.com/)**
 
-How much is needed:
+### Production funding:
 
-- **~1.0+ SOL** - transaction fees (escrow locks, etc.)
-- **Additional SOL/tokens** - deposit per job
+Use the user's normal Solana funding path for the configured production network. Do not use the devnet faucet or devnet RPC for production.
 
-### Check balance:
+### Check balance manually:
+
+Manual checks are for inspecting the raw wallet balance. `heyarp selftest` remains the readiness source of truth.
+
+#### Devnet
 
 ```powershell
-# Option 1: solana CLI (if installed)
-solana balance <SETTLEMENT_PUBKEY> --url devnet
+# Option 1: Solana CLI (if installed)
+solana balance <SETTLEMENT_PUBKEY> --url https://api.devnet.solana.com
 
 # Option 2: Invoke-RestMethod (no Solana CLI needed)
+$rpcUrl = 'https://api.devnet.solana.com'
 $body = @{ jsonrpc = '2.0'; id = 1; method = 'getBalance'; params = @('<SETTLEMENT_PUBKEY>') } | ConvertTo-Json -Compress
-$result = Invoke-RestMethod -Uri 'https://api.devnet.solana.com' -Method Post -ContentType 'application/json' -Body $body
+$result = Invoke-RestMethod -Uri $rpcUrl -Method Post -ContentType 'application/json' -Body $body
+"$($result.result.value / 1e9) SOL"
+```
+
+#### Production / Mainnet
+
+Use the same production RPC URL configured for this agent.
+
+```powershell
+# Option 1: Solana CLI (if installed)
+solana balance <SETTLEMENT_PUBKEY> --url <YOUR_PRODUCTION_SOLANA_RPC_URL>
+
+# Option 2: Invoke-RestMethod (no Solana CLI needed)
+$rpcUrl = '<YOUR_PRODUCTION_SOLANA_RPC_URL>'
+$body = @{ jsonrpc = '2.0'; id = 1; method = 'getBalance'; params = @('<SETTLEMENT_PUBKEY>') } | ConvertTo-Json -Compress
+$result = Invoke-RestMethod -Uri $rpcUrl -Method Post -ContentType 'application/json' -Body $body
 "$($result.result.value / 1e9) SOL"
 ```
 
