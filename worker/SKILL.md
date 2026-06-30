@@ -47,13 +47,12 @@ Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex w
                                      then dispatch, exits idempotent + resumable; uses the buyer's --wait-until mechanics
                                             |
                                             +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
-                                            +-> DONE order, terminal?          -> clean up tracking
 ```
 
 - **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
-- **Dispatch is capacity-limited and backlog-first.** The watchdog discovers pending delegations from live relationship/delegation state, sorts known delegation timestamps oldest first, and starts only up to `MAX_WORKERS` live runner processes. Inbox events provide fresh metadata, but the inbox page alone must not decide work order.
+- **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It starts only up to `MAX_JOBS` live runner processes.
 
 ## Framework adapter - Windows Task Scheduler + Node.js + Codex Desktop
 
@@ -72,26 +71,25 @@ Windows-specific guardrails:
 - Use Windows Task Scheduler only for durable recurrence and reboot recovery.
 - Use Node.js for watchdog and worker-run orchestration. Node is already required by `heyarp`, so do not depend on Bash, WSL, Git Bash, or Python.
 - Do not use Codex Desktop heartbeat/cron automation for every-minute idle polling. In practice it can start a full Codex/Node runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
-- Only wake a full Codex worker run when the watchdog emits `NEW delegation`, `NEW work_request`, or `STALL`.
-- Process `NEW handshake` inline in the watchdog; process `DONE` inline by cleaning tracking files.
+- Only wake a full Codex worker run when the watchdog emits a `NEW` active task or `STALL`.
+- Process `NEW handshake` inline in the watchdog; process worker orders from `heyarp tasks --next --json`.
 - Treat lock files as hints, not proof of a live worker. If no real `node ...arp-worker-run-codex.js ...<delegationId>` process exists for that delegation, remove the stale lock and re-dispatch.
 - If several local worker agents share one `%USERPROFILE%\.heyarp\agents.json`, run one scheduled task per worker DID. Each task must pass its own `--from-did <worker-did>` and its own `--state-root`.
 
 ## 1. Continuous inbox monitor
 
-The watchdog runs every minute and acts on actionable lines. It does **two** scans: (1) NEW orders from the inbox, and (2) a **health-check** of existing delegations - without (2) the monitor would only ever wake on new inbox traffic and a stalled order (a dead worker run, no new events) would hang forever until the buyer cancels.
+The watchdog runs every minute and acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
 
 Three line kinds:
 
 | Line                                                       | Meaning                                                                     | Watchdog does      |
 | ---------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------ |
-| `NEW   <rel> <type> <eventId> <senderDid> <delId> <reqId>` | a fresh handshake / delegation offer / work_request                         | dispatch (2c)      |
-| `STALL <rel> <delId> <state> <age_min>`                    | non-terminal order, no worker heartbeat for `STALL_MIN`; worker likely died | re-dispatch (2b)   |
-| `DONE  <rel> <delId> <state>`                              | terminal (completed/canceled/declined/refunded)                             | clean up (2a)      |
+| `NEW   <rel> <type> <eventId> <senderDid> <delId> <reqId>` | a fresh handshake or server-reported active task                            | dispatch (2b)      |
+| `STALL <rel> <delId> <state> <age_min>`                    | non-terminal order, no worker heartbeat for `STALL_MIN`; worker likely died | re-dispatch (2a)   |
 
 `STALL_MIN` defaults to 3 minutes. Override it only when needed by passing `--stall-min <minutes>` to `arp-worker-watchdog.js`. A stale heartbeat does not emit `STALL` while the per-delegation runner process is still alive.
 
-`MAX_WORKERS` defaults to 3. Override it with `--max-workers <count>` or `ARP_WORKER_MAX_WORKERS=<count>`. When capacity is full, the watchdog does not append the event to `seen.txt`; the next tick retries the same pending delegation.
+`MAX_JOBS` defaults to 3. Override it with `--max-jobs <count>` or `ARP_WORKER_MAX_JOBS=<count>`. When capacity is full, the watchdog does not append the event to `seen.txt`; the next tick retries the same pending delegation.
 
 Minimal Windows layout:
 
@@ -175,14 +173,13 @@ Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worke
 
 The watchdog should:
 
-- Exit immediately when there are no `NEW`, `STALL`, or `DONE` lines.
-- Discover pending backlog from live `heyarp relationships --json` and `heyarp delegations <rel-id> --json`, not only from the recent inbox page.
-- Sort pending undispatched delegations oldest first when the server returns timestamps; unknown timestamps sort last.
-- Keep at most `MAX_WORKERS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
+- Exit immediately when there are no `NEW` or `STALL` lines.
+- Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
+- Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
+- Keep at most `MAX_JOBS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
 - Pass `--from-did <worker-did>` to every HeyARP read/action when configured, and pass the same DID into the Codex worker run prompt.
-- Process `DONE` by removing that delegation ID from `dispatched.txt`.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
-- For `NEW delegation`, `NEW work_request`, and `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
+- For `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
 - Append `delegationId<TAB>epoch` to `dispatched.txt` only after the worker run is started or resumed.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - Never truncate existing state/log files during startup.
@@ -213,21 +210,15 @@ Unregister-ScheduledTask -TaskName 'ARP worker monitor' -Confirm:$false
 
 ## 2. Dispatch (what the watchdog does each tick)
 
-Handle watchdog lines in this order: **DONE -> STALL -> NEW** (clean up and recover before taking on new work).
+Handle watchdog lines in this order: **STALL -> NEW** (recover before taking on new work).
 
-### 2a. `DONE` - terminal delegation -> clean up
-
-Remove every line for that delegation ID from `dispatched.txt` so it stops being health-checked. The shipped `arp-worker-watchdog.js` does this with an empty-array-safe rewrite, so deleting the only line does not throw.
-
-The relationship is now free - the buyer's NEXT order is a new delegation ID and dispatches normally. A `canceled` order, e.g. the buyer timed out waiting, is just cleaned up here; nothing else to do.
-
-### 2b. `STALL` - non-terminal, worker run went silent -> re-dispatch
+### 2a. `STALL` - active task, worker run went silent -> re-dispatch
 
 Start a **fresh worker run** with the same context (`relationshipId`, `delegationId`, `senderDid`, `requestId` if any, service description) and tell it to run section 3. Then append a fresh heartbeat so it is not re-flagged for another window.
 
 This is safe: the worker run first **reads the current state and resumes** (3b) - `accept` is a no-op if already accepted, and it never re-`respond`s/re-`propose`s work that is already done (3a). Worst case (the old worker run was actually still alive) the two race and the loser's write is rejected by the state guard - no double-spend, no double-deliver.
 
-### 2c. `NEW` - a fresh actionable event
+### 2b. `NEW` - a fresh actionable event or task
 
 - **`handshake`** -> accept inline (cheap, no worker run):
 
@@ -235,14 +226,14 @@ This is safe: the worker run first **reads the current state and resumes** (3b) 
   heyarp send-handshake-response <senderDid> --decision accept --notes "Ready to take your order."
   ```
 
-- **`delegation` offer** or an **orphan `work_request`** -> **start a worker run** (separate process), pass it the order context and tell it to run section 3 to completion. Record the dispatch only after the process starts.
+- **task row from `heyarp tasks --next --json`** -> **start a worker run** (separate process), pass it the order context and tell it to run section 3 to completion. Record the dispatch only after the process starts.
 
-The watchdog must extract IDs from both top-level event fields and ARP body content. Delegation offers commonly carry the delegation ID at `body.content.delegation_id`, not at top level.
+The watchdog gets task IDs from the server's active task row, not from inbox delegation/work_request events.
 
-### 2d. Deduplication (per delegation, crash-surviving)
+### 2c. Deduplication (per delegation, crash-surviving)
 
 - **`seen.txt`** (event IDs) - append a handled event ID **AFTER** the worker run started / the handshake was accepted. If dispatch fails, do NOT append - the next tick retries.
-- **`dispatched.txt`** (`delegationId<TAB>epoch`) - the per-delegation owner record + heartbeat. A delegation ID in here is "owned" and a new inbox event for it is skipped - **unless** the watchdog re-surfaces it as `STALL` (owner died) or `DONE` (terminal). Latest epoch per ID wins; `DONE` removes it.
+- **`dispatched.txt`** (`delegationId<TAB>epoch`) - the per-delegation owner record + heartbeat. A delegation ID in here is "owned" until `heyarp tasks --next --json` returns it again with a stale heartbeat and the watchdog re-surfaces it as `STALL`. Latest epoch per ID wins.
 - **Never dedup by relationship.** Two orders in one relationship are two delegation IDs and progress independently - the bug that broke the second order was treating the relationship (not the delegation) as "busy".
 
 ## 3. Worker order cycle (the worker run's job)
@@ -261,7 +252,7 @@ Codex Desktop worker-run guardrails:
 - Keep heartbeating while `codex exec` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
-- When the cycle reaches terminal state, remove every line for that delegation ID from `dispatched.txt`.
+- When the cycle reaches terminal state, it disappears from `heyarp tasks --next --json`; no local terminal cleanup is needed.
 
 Debug a stuck delegation in this order:
 
@@ -340,8 +331,6 @@ State -> next step: delegation `offered` -> `delegation accept`; `accepted` -> w
 | `locked` + work-log `requested`, no response                       | worker run crashed before `work respond`                                        | re-dispatched worker reads state, produces output, responds                                       |
 | work-log `responded` + lock `in_progress`                          | worker run crashed before on-chain `escrow submit-work`                         | re-dispatched worker runs `escrow submit-work`                                                    |
 | work-log `responded` + lock `submitted`, no receipt                 | worker run crashed before `receipt propose`                                     | re-dispatched worker proposes the receipt                                                         |
-| Delegation `canceled`                                              | buyer timed out waiting for the response                                        | `DONE` cleanup frees the relationship                                                            |
-| `DONE` cleanup writes null                                         | filtered `dispatched.txt` result was empty                                      | the shipped Node watchdog rewrites empty files safely                                             |
 | Stale lock blocks all future work                                  | machine rebooted or runner died after writing a lock                            | watchdog checks for a live runner process and removes stale locks                                 |
 | Two orders from one buyer, second ignored                          | dedup keyed by relationship instead of delegation                               | dedup is per delegation ID                                                                        |
 | `work respond` fails "already responded"                           | a re-dispatch raced the old worker run                                          | guard with a state read before responding; the failure is harmless                                |
