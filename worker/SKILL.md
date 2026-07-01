@@ -74,7 +74,7 @@ Windows-specific guardrails:
 - Only wake a full Claude Code worker run when the watchdog emits a `NEW` active task or `STALL`.
 - Process `NEW handshake` inline in the watchdog; process worker orders from `heyarp tasks --next --json`.
 - Treat lock files as hints, not proof of a live worker. If no real `node ...arp-worker-run-claude.js ...<delegationId>` process exists for that delegation, remove the stale lock and re-dispatch.
-- If several local worker agents share one `%USERPROFILE%\.heyarp\agents.json`, run one scheduled task per worker DID. Each task must pass its own `--from-did <worker-did>` and its own `--state-root`.
+- Every scheduled worker task must be pinned to exactly one worker DID. Always pass `--from-did <worker-did>` and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the watchdog from breaking later when another agent is added to the same `%USERPROFILE%\.heyarp\agents.json`.
 
 ## 1. Continuous inbox monitor
 
@@ -98,11 +98,11 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-run-claude.js
-%USERPROFILE%\.heyarp-worker\seen.txt
-%USERPROFILE%\.heyarp-worker\dispatched.txt
-%USERPROFILE%\.heyarp-worker\monitor.log
-%USERPROFILE%\.heyarp-worker\logs\
-%USERPROFILE%\.heyarp-worker\runs\
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\monitor.log
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\logs\
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\runs\
 ```
 
 If the scripts are missing from the installed skill folder, fetch them:
@@ -119,20 +119,19 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Register the watchdog:
 
 ```powershell
-$taskName = 'ARP worker monitor'
 $skillsRoot = "$HOME\.claude\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 $hiddenLauncher = Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs'
 $workspace = (Get-Location).Path
-$fromDid = '' # Optional: set to did:arp:... when multiple local agents share one agents.json.
-$stateRoot = Join-Path $HOME '.heyarp-worker'
-$watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`""
-if ($fromDid) {
-  $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
-  $taskName = "ARP worker monitor $safeDid"
-  $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
-  $watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`""
+
+$fromDid = 'did:arp:<worker-did>' # REQUIRED: use the DID of this worker agent.
+if ($fromDid -notmatch '^did:arp:') {
+  throw 'Set $fromDid to the worker DID before registering the watchdog.'
 }
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$taskName = "ARP worker monitor $safeDid"
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+$watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`""
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
@@ -160,16 +159,7 @@ Register-ScheduledTask `
 
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window every minute. The hidden launcher keeps the watchdog tick in the background.
 
-For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Use a unique task name and unique state root for each DID:
-
-```powershell
-$fromDid = 'did:arp:<worker-did>'
-$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
-$taskName = "ARP worker monitor $safeDid"
-$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
-```
-
-Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
+For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
 The watchdog should:
 
@@ -177,14 +167,14 @@ The watchdog should:
 - Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
 - Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
 - Keep at most `MAX_JOBS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
-- Pass `--from-did <worker-did>` to every HeyARP read/action when configured, and pass the same DID into the Claude Code worker run prompt.
+- Pass `--from-did <worker-did>` to every HeyARP read/action, and pass the same DID into the worker run prompt.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
 - For `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-claude.js`; the watchdog itself must not merely queue the event and stop.
 - Append `delegationId<TAB>epoch` to `dispatched.txt` only after the worker run is started or resumed.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - Never truncate existing state/log files during startup.
-- Log each tick and every dispatch attempt to `$HOME\.heyarp-worker\monitor.log`.
-- For each delegation, write diagnostic files under `$HOME\.heyarp-worker\logs\`:
+- Log each tick and every dispatch attempt to `<state-root>\monitor.log`.
+- For each delegation, write diagnostic files under `<state-root>\logs\`:
   - `<delegation-id>.dispatch.log` - dispatcher decisions, stale-lock cleanup, child PID, stdout/stderr paths.
   - `<delegation-id>.runner.log` - runner lifecycle, Claude Code path, prompt file, heartbeat start/stop, final exit code.
   - `<delegation-id>.runner.stdout.log` - stdout from the runner process.
@@ -194,18 +184,25 @@ The watchdog should:
 Verify the task and worker:
 
 ```powershell
-Start-ScheduledTask -TaskName 'ARP worker monitor'
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$taskName = "ARP worker monitor $safeDid"
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+
+Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 5
-Get-ScheduledTask -TaskName 'ARP worker monitor'
-Get-ScheduledTaskInfo -TaskName 'ARP worker monitor'
-Get-Content -LiteralPath "$HOME\.heyarp-worker\monitor.log" -Tail 10
+Get-ScheduledTask -TaskName $taskName
+Get-ScheduledTaskInfo -TaskName $taskName
+Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 10
 heyarp selftest --role worker
 ```
 
 Remove the task:
 
 ```powershell
-Unregister-ScheduledTask -TaskName 'ARP worker monitor' -Confirm:$false
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+Unregister-ScheduledTask -TaskName "ARP worker monitor $safeDid" -Confirm:$false
 ```
 
 ## 2. Dispatch (what the watchdog does each tick)
@@ -244,7 +241,7 @@ Mirror of the buyer flow, "my-turn" side. Wait for the buyer's moves with the sa
 
 Claude Code worker-run guardrails:
 
-- Create a per-delegation lock file under `$HOME\.heyarp-worker\runs\` before launching `claude --print`; if the lock is held, skip the duplicate event only when the PID still belongs to a live worker runner for that delegation.
+- Create a per-delegation lock file under `<state-root>\runs\` before launching the selected runner; if the lock is held, skip the duplicate event only when the PID still belongs to a live worker runner for that delegation.
 - Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
 - Keep the `claude --print` worker responsible for the full order cycle: `delegation accept` -> wait lock -> `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
@@ -258,11 +255,14 @@ Debug a stuck delegation in this order:
 
 ```powershell
 $DEL = '<delegation-id>'
-Get-Content -LiteralPath "$HOME\.heyarp-worker\monitor.log" -Tail 100
-Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.dispatch.log" -Tail 100
-Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.runner.log" -Tail 100
-Get-Content -LiteralPath "$HOME\.heyarp-worker\logs\$DEL.runner.stderr.log" -Tail 100
-Get-Content -LiteralPath "$HOME\.heyarp-worker\runs\$DEL.lock" -ErrorAction SilentlyContinue
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 100
+Get-Content -LiteralPath (Join-Path $stateRoot "logs\$DEL.dispatch.log") -Tail 100
+Get-Content -LiteralPath (Join-Path $stateRoot "logs\$DEL.runner.log") -Tail 100
+Get-Content -LiteralPath (Join-Path $stateRoot "logs\$DEL.runner.stderr.log") -Tail 100
+Get-Content -LiteralPath (Join-Path $stateRoot "runs\$DEL.lock") -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process | Where-Object {
     $_.CommandLine -and $_.CommandLine.Contains('arp-worker-run-claude.js') -and $_.CommandLine.Contains($DEL)
 } | Select-Object ProcessId,Name,CommandLine

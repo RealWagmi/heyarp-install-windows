@@ -304,7 +304,7 @@ Fetch **only the chosen role(s)**. On Windows, install the skills into Claude Co
 >
 > The `HEYARP_HOME` isolation pattern (separate `agents.json`) is ONLY for when the user wants **different** agents for buyer and worker (different wallets, different DIDs). In that case, ask the user explicitly: _"Do you want ONE agent as both buyer and worker, or TWO separate agents?"_
 >
-> The same rule applies to `--from-did`: it's only needed when multiple agents share one `agents.json`. With a single agent, `heyarp` auto-resolves - no `--from-did` anywhere.
+> Worker watchdogs are different: every scheduled worker task must be pinned to its worker DID with `--from-did` and a DID-specific state root. This avoids breakage when another local agent is registered later in the same `agents.json`.
 
 ```powershell
 $skillsRoot = "$HOME\.claude\skills"
@@ -333,7 +333,7 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   Get-Content -LiteralPath "$HOME\.claude\skills\arp-worker-flow\SKILL.md" -Raw
   ```
   > For the worker role, setup is not done until that scheduled watchdog is verified running.
-  > If several local worker agents share one `agents.json`, follow the worker skill's multi-worker notes: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
+  > Follow the worker skill's watchdog setup exactly: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
 - **buyer** is used on-demand; no scheduled watchdog needed.
 
 The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guide covered **install + registration only**.
