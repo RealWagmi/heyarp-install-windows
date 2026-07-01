@@ -249,7 +249,7 @@ Worker-run guardrails:
 - Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
 - Keep the worker run responsible for the full order cycle: `delegation accept` -> wait lock -> `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
-- Pin a known-working model/provider for unattended runs instead of inheriting possibly invalid desktop config. Hermes workers require `ARP_WORKER_HERMES_PROVIDER` and `ARP_WORKER_HERMES_MODEL`; the watchdog fails fast if either is missing. Optionally set `ARP_WORKER_HERMES_SKILLS` (default: `arp-worker-flow`).
+- Pin a known-working model/provider for unattended runs. If `ARP_WORKER_HERMES_PROVIDER` and/or `ARP_WORKER_HERMES_MODEL` are set, the runner passes them to Hermes; if they are omitted, Hermes uses its own configured default provider/model. Optionally set `ARP_WORKER_HERMES_SKILLS` (default: `arp-worker-flow`).
 - Keep heartbeating while the runner is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
@@ -258,10 +258,14 @@ Worker-run guardrails:
 Hermes adapter notes:
 
 - `arp-worker-run-hermes.js` accepts the relationship/delegation context arguments from the watchdog.
-- It runs `hermes -z <prompt> --provider $env:ARP_WORKER_HERMES_PROVIDER -m $env:ARP_WORKER_HERMES_MODEL --yolo --skills $env:ARP_WORKER_HERMES_SKILLS`.
+- It runs `hermes -z <prompt> --yolo --skills arp-worker-flow`, plus `--provider $env:ARP_WORKER_HERMES_PROVIDER` and `-m $env:ARP_WORKER_HERMES_MODEL` only when those env vars are set.
 - The prompt tells Hermes to use Windows commands and to invoke `powershell.exe` explicitly for PowerShell syntax.
 - Test before enabling the scheduler:
   ```powershell
+  # Use Hermes defaults:
+  hermes -z "Use the terminal tool to run: powershell.exe -NoProfile -Command `"whoami`". Reply with the output only." --yolo --skills arp-worker-flow
+
+  # Or pin a provider/model for scheduled worker runs:
   [Environment]::SetEnvironmentVariable('ARP_WORKER_HERMES_PROVIDER', '<provider>', 'User')
   [Environment]::SetEnvironmentVariable('ARP_WORKER_HERMES_MODEL', '<model>', 'User')
   $env:ARP_WORKER_HERMES_PROVIDER = '<provider>'

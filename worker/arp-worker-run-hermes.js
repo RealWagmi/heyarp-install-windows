@@ -50,17 +50,6 @@ function requireArg(args, name) {
   return value;
 }
 
-function requireEnv(name) {
-  const value = process.env[name];
-  if (!value) {
-    throw new Error(
-      `Missing required environment variable ${name}. ` +
-      'Set ARP_WORKER_HERMES_PROVIDER and ARP_WORKER_HERMES_MODEL before running the Hermes worker.',
-    );
-  }
-  return value;
-}
-
 function buildPrompt(context) {
   return `You are the HeyARP worker run for one delegation.
 
@@ -133,14 +122,16 @@ function main() {
   }, 60000);
   appendLine(dispatchedFile, `${delegationId}\t${Math.floor(Date.now() / 1000)}`);
 
-  const model = requireEnv('ARP_WORKER_HERMES_MODEL');
-  const provider = requireEnv('ARP_WORKER_HERMES_PROVIDER');
+  const model = process.env.ARP_WORKER_HERMES_MODEL || '';
+  const provider = process.env.ARP_WORKER_HERMES_PROVIDER || '';
   const skillList = process.env.ARP_WORKER_HERMES_SKILLS || 'arp-worker-flow';
-  const hermesArgs = [
-    '--provider', provider,
-    '-m', model,
-    '--yolo',
-  ];
+  const hermesArgs = ['--yolo'];
+  if (provider) {
+    hermesArgs.push('--provider', provider);
+  }
+  if (model) {
+    hermesArgs.push('-m', model);
+  }
   if (skillList) {
     hermesArgs.push('--skills', skillList);
   }
