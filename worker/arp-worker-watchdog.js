@@ -91,6 +91,18 @@ function withFromDid(args, fromDid) {
   return fromDid ? [...args, '--from-did', fromDid] : args;
 }
 
+function requireHermesRuntimeEnv() {
+  const missing = [];
+  if (!process.env.ARP_WORKER_HERMES_PROVIDER) missing.push('ARP_WORKER_HERMES_PROVIDER');
+  if (!process.env.ARP_WORKER_HERMES_MODEL) missing.push('ARP_WORKER_HERMES_MODEL');
+  if (missing.length) {
+    throw new Error(
+      `Missing Hermes worker runtime env: ${missing.join(', ')}. ` +
+      'Set them before enabling the scheduled worker, then test Hermes with the selected provider/model.',
+    );
+  }
+}
+
 // Resolve all persistent worker paths.
 // Everything under .heyarp-worker survives process exits and PC reboots.
 function getStatePaths(args) {
@@ -357,6 +369,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
 // 4. Health-check actionable tasks for STALL, then dispatch NEW work.
 // 5. Exit quickly so Task Scheduler can call us again next minute.
 function main() {
+  requireHermesRuntimeEnv();
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
