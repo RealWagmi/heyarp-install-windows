@@ -43,6 +43,19 @@ function readLines(file) {
   return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean);
 }
 
+function readJsonFile(file, fallback) {
+  if (!fs.existsSync(file)) return fallback;
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeJsonFile(file, value) {
+  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+}
+
 // Quote one command argument for Windows shell execution.
 // We use this for heyarp commands because npm global commands are often .cmd shims.
 function quoteCmdArg(value) {
@@ -108,6 +121,7 @@ function getStatePaths(args) {
     logsRoot,
     seenFile: path.join(stateRoot, 'seen.txt'),
     dispatchedFile: path.join(stateRoot, 'dispatched.txt'),
+    notFundedFile: path.join(stateRoot, 'not-funded.json'),
     monitorLog: path.join(stateRoot, 'monitor.log'),
     monitorLock: path.join(stateRoot, 'monitor.lock'),
   };
@@ -165,6 +179,15 @@ function getProcessCommandLine(pid) {
   return result.status === 0 ? (result.stdout || '').trim() : '';
 }
 
+function stopProcessTree(pid) {
+  if (!pid || pid === process.pid) return false;
+  const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  return result.status === 0;
+}
+
 // Parse a lock file such as:
 //   pid=1234 started=... delegation=... relationship=...
 function readLock(lockFile) {
@@ -200,6 +223,90 @@ function countActiveJobs(paths) {
     if (isActiveWorker(lockFile, delegationId)) count += 1;
   }
   return count;
+}
+
+function isAwaitingFund(task) {
+  return task.phase === 'awaiting_fund'
+    || (task.state === 'accepted' && task.nextActionOwner === 'counterparty');
+}
+
+function getTaskUpdatedEpoch(task, fallback) {
+  const updatedAt = Date.parse(task.updatedAt || task.createdAt || '');
+  return Number.isFinite(updatedAt) ? Math.floor(updatedAt / 1000) : fallback;
+}
+
+function dropActiveAwaitingFundRun(paths, delegationId, log) {
+  const lockFile = path.join(paths.runsRoot, `${delegationId}.lock`);
+  const lock = readLock(lockFile);
+  const pid = Number(lock.fields && lock.fields.pid);
+  if (!pid || !isActiveWorker(lockFile, delegationId)) {
+    fs.rmSync(lockFile, { force: true });
+    return;
+  }
+
+  const stopped = stopProcessTree(pid);
+  fs.rmSync(lockFile, { force: true });
+  log(`not-funded dropped active runner delegation=${delegationId} pid=${pid} stopped=${stopped}`);
+}
+
+function shouldSkipForFunding(task, paths, fundingState, now, log) {
+  const delegationId = task.delegationId || '';
+  if (!delegationId) return false;
+
+  const existing = fundingState[delegationId];
+  if (existing && existing.status === 'stale') {
+    fundingState[delegationId] = existing;
+    log(`not-funded stale skip delegation=${delegationId} attempts=${existing.attempts}`);
+    return true;
+  }
+
+  if (!isAwaitingFund(task)) {
+    if (existing) {
+      delete fundingState[delegationId];
+      log(`not-funded cleared delegation=${delegationId} phase=${task.phase || task.state || ''}`);
+    }
+    return false;
+  }
+
+  const waitSeconds = 5 * 60;
+  const cooldowns = [15 * 60, 30 * 60, 60 * 60];
+  const firstSeen = existing && existing.firstSeen ? existing.firstSeen : getTaskUpdatedEpoch(task, now);
+  const record = existing || {
+    relationshipId: task.relationshipId || '',
+    firstSeen,
+    attempts: 0,
+    status: 'watching',
+    nextCheckAt: firstSeen + waitSeconds,
+  };
+
+  record.relationshipId = task.relationshipId || record.relationshipId || '';
+  record.lastState = task.state || '';
+  record.lastPhase = task.phase || '';
+  record.lastSeen = now;
+
+  if (now < record.nextCheckAt) {
+    fundingState[delegationId] = record;
+    log(`not-funded cooldown skip delegation=${delegationId} attempts=${record.attempts} next_check=${new Date(record.nextCheckAt * 1000).toISOString()}`);
+    return true;
+  }
+
+  if (record.attempts >= cooldowns.length) {
+    record.status = 'stale';
+    record.staleAt = now;
+    fundingState[delegationId] = record;
+    dropActiveAwaitingFundRun(paths, delegationId, log);
+    log(`not-funded stale delegation=${delegationId} attempts=${record.attempts}`);
+    return true;
+  }
+
+  record.attempts += 1;
+  record.status = 'cooldown';
+  record.lastChecked = now;
+  record.nextCheckAt = now + cooldowns[record.attempts - 1];
+  fundingState[delegationId] = record;
+  dropActiveAwaitingFundRun(paths, delegationId, log);
+  log(`not-funded check delegation=${delegationId} attempts=${record.attempts} next_check=${new Date(record.nextCheckAt * 1000).toISOString()}`);
+  return true;
 }
 
 function isWorkerLine(line) {
@@ -371,6 +478,8 @@ function main() {
     // dispatched.txt tells us which active tasks already have a worker run.
     const seen = new Set(readLines(paths.seenFile));
     const dispatched = readDispatchMap(paths.dispatchedFile);
+    const fundingState = readJsonFile(paths.notFundedFile, {});
+    let fundingStateChanged = false;
     const lines = [];
     const queuedDelegations = new Set();
 
@@ -406,6 +515,13 @@ function main() {
       const relationshipId = task.relationshipId || '';
       if (!delegationId || !relationshipId || queuedDelegations.has(delegationId)) continue;
 
+      const beforeFunding = JSON.stringify(fundingState[delegationId] || null);
+      if (shouldSkipForFunding(task, paths, fundingState, now, log)) {
+        fundingStateChanged = fundingStateChanged || beforeFunding !== JSON.stringify(fundingState[delegationId] || null);
+        continue;
+      }
+      fundingStateChanged = fundingStateChanged || beforeFunding !== JSON.stringify(fundingState[delegationId] || null);
+
       if (dispatched.has(delegationId)) {
         const age = now - dispatched.get(delegationId);
         if (age > stallSeconds) {
@@ -428,6 +544,7 @@ function main() {
         ]);
       }
     }
+    if (fundingStateChanged) writeJsonFile(paths.notFundedFile, fundingState);
 
     // Idle is the expected common case. Log it and stop.
     if (!lines.length) {

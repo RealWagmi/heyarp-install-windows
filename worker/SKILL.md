@@ -59,6 +59,7 @@ Normal: Windows Task Scheduler -> Node SSE daemon -> inbox event? -> one watchdo
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
 - **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It starts only up to `MAX_JOBS` live runner processes.
+- **Unfunded accepted jobs must not block capacity forever.** If a delegation is accepted but remains `awaiting_fund`, the watchdog drops the live runner after 5 minutes, records it in `<state-root>\not-funded.json`, retries checks after 15 minutes, 30 minutes, then 60 minutes, and marks it `stale` if no payment is visible after those checks.
 
 ## Framework adapter - Windows Task Scheduler + Node.js + Codex Desktop
 
@@ -122,6 +123,7 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\arp-worker-run-codex.js
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\not-funded.json
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\monitor.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\sse-daemon.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\watchdog-loop.log
@@ -169,7 +171,8 @@ $action = New-ScheduledTaskAction `
   -Argument $monitorArgs
 
 $trigger = New-ScheduledTaskTrigger `
-  -AtLogOn
+  -AtLogOn `
+  -User (whoami)
 
 $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
@@ -178,16 +181,23 @@ $settings = New-ScheduledTaskSettingsSet `
   -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
+$principal = New-ScheduledTaskPrincipal `
+  -UserId (whoami) `
+  -LogonType Interactive `
+  -RunLevel Limited
+
 Register-ScheduledTask `
   -TaskName $taskName `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
+  -Principal $principal `
   -Description 'Runs the HeyARP worker SSE daemon through a hidden launcher.' `
   -Force | Out-Null
 ```
 
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
+`RunLevel Limited` is intentional for Windows PowerShell 5.1; `LeastPrivilege` is not a valid ScheduledTasks enum value on this system.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
@@ -198,6 +208,7 @@ The watchdog should:
 - Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
 - Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
 - Keep at most `MAX_JOBS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
+- Treat `accepted` / `awaiting_fund` as buyer-owned waiting time, not active worker work forever. After 5 minutes without visible funding, terminate that delegation's live runner, write/update `<state-root>\not-funded.json`, skip it for 15 minutes, then 30 minutes, then 60 minutes, and mark it `stale` after the third unfunded retry window.
 - Pass `--from-did <worker-did>` to every HeyARP read/action, and pass the same DID into the worker run prompt.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
 - For `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
@@ -283,11 +294,17 @@ $settings = New-ScheduledTaskSettingsSet `
   -StartWhenAvailable `
   -ExecutionTimeLimit (New-TimeSpan -Days 1)
 
+$principal = New-ScheduledTaskPrincipal `
+  -UserId (whoami) `
+  -LogonType Interactive `
+  -RunLevel Limited
+
 Register-ScheduledTask `
   -TaskName $loopTaskName `
   -Action $loopAction `
   -Trigger $trigger `
   -Settings $settings `
+  -Principal $principal `
   -Description 'TEST: runs the HeyARP worker watchdog loop every second.' `
   -Force | Out-Null
 
@@ -296,6 +313,7 @@ Register-ScheduledTask `
   -Action $metricsAction `
   -Trigger $trigger `
   -Settings $settings `
+  -Principal $principal `
   -Description 'TEST: logs HeyARP worker CPU, RAM, and monitor.log growth every second.' `
   -Force | Out-Null
 
@@ -361,6 +379,7 @@ The watchdog gets task IDs from the server's active task row, not from inbox del
 
 - **`seen.txt`** (event IDs) - append a handled event ID **AFTER** the worker run started / the handshake was accepted. If dispatch fails, do NOT append - the next tick retries.
 - **`dispatched.txt`** (`delegationId<TAB>epoch`) - the per-delegation owner record + heartbeat. A delegation ID in here is "owned" until `heyarp tasks --next --json` returns it again with a stale heartbeat and the watchdog re-surfaces it as `STALL`. Latest epoch per ID wins.
+- **`not-funded.json`** - durable cooldown state for accepted delegations waiting on buyer funding. The watchdog clears the entry as soon as the server reports a funded/actionable phase again.
 - **Never dedup by relationship.** Two orders in one relationship are two delegation IDs and progress independently - the bug that broke the second order was treating the relationship (not the delegation) as "busy".
 
 ## 3. Worker order cycle (the worker run's job)
@@ -375,6 +394,7 @@ Codex Desktop worker-run guardrails:
 - Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
 - Keep the `codex exec` worker responsible for the full order cycle: `delegation accept` -> wait lock -> `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
+- Do not let a Codex runner wait forever before buyer funding. If the exact delegation stays accepted/`awaiting_fund` with no escrow lock for 5 minutes, the runner should stop cleanly; the watchdog owns the not-funded cooldown and stale policy.
 - Pin a known-working model/tier for unattended runs instead of inheriting possibly invalid desktop config. Test with a small `codex exec` prompt before enabling the scheduler.
 - Keep heartbeating while `codex exec` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
