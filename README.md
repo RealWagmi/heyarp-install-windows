@@ -320,10 +320,6 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-sse-daemon.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-loop.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-loop-hidden.vbs"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-logger.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-metrics-logger.js"
-Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-metrics-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
 ```
 

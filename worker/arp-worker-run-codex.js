@@ -65,8 +65,8 @@ Context:
 
 Required behavior:
 1. Read live state with heyarp delegations, heyarp escrow show, heyarp work-list, and heyarp receipts${context.fromDid ? `, always passing --from-did ${context.fromDid}` : ''}.
-2. If delegation is offered, run: heyarp delegation accept ${context.relationshipId} ${context.delegationId}${context.fromDid ? ` --from-did ${context.fromDid}` : ''}
-3. Wait for delegation.locked. If the exact delegation remains accepted/awaiting_fund and no escrow lock exists for 5 minutes, stop cleanly; the watchdog will put it into not-funded cooldown and retry later.
+2. If delegation is offered, stop cleanly; the watchdog accepts offers inline before starting this runner.
+3. If delegation is accepted/awaiting_fund and no escrow lock exists, stop cleanly; the watchdog/SSE daemon will re-check later without consuming a runner slot.
 4. If escrow state is created, run: heyarp escrow accept ${context.delegationId}${context.fromDid ? ` --from-did ${context.fromDid}` : ''}
 5. Wait for work.requested.
 6. Produce the requested deliverable.
