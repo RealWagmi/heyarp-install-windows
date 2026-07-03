@@ -42,14 +42,18 @@ Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination
 ## Core model
 
 ```text
-Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex worker run per order
-   fresh cheap tick                  health-check first,  accept -> wait lock -> escrow accept -> produce -> respond -> submit-work -> propose -> wait release
-                                     then dispatch, exits idempotent + resumable; uses the buyer's --wait-until mechanics
-                                            |
-                                            +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
+Normal: Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex worker run per order
+           fresh cheap tick                  health-check first,  accept -> wait lock -> escrow accept -> produce -> respond -> submit-work -> propose -> wait release
+                                             then dispatch, exits idempotent + resumable; uses the buyer's --wait-until mechanics
+                                                    |
+                                                    +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
+
+1s test: Windows Task Scheduler -> Node loop -> watchdog every 1s
+                                  separate metrics logger -> CPU/RAM/log growth JSONL
 ```
 
 - **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
+- **The 1-second mode is an opt-in test loop, not the default.** Windows Task Scheduler is not a true one-second cron, so the test task starts `arp-worker-watchdog-loop.js` once and that process calls the existing watchdog every second.
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
 - **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It starts only up to `MAX_JOBS` live runner processes.
@@ -58,18 +62,21 @@ Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex w
 
 The order logic and every `heyarp` command below are universal. The runtime primitives are adapted to Windows:
 
-| Primitive the skill needs                                                   | Windows implementation                                                   |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Recurring wake** - run the watchdog every ~1m with a cheap process        | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs` |
-| **Spawn a worker run** - a separate, isolated session per order             | `arp-worker-watchdog.js` starts `arp-worker-run-codex.js`                |
-| **Background run + notify on completion** - for long waits                  | the Node runner owns `codex exec`, logs output, and heartbeats           |
-| **Script directory** - where monitor/runner scripts live                    | the installed `arp-worker-flow` skill folder                             |
-| **State directory** - the dedup / heartbeat files                           | `$HOME\.heyarp-worker\`                                                  |
+| Primitive the skill needs                                                    | Windows implementation                                                   |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| **Recurring wake** - run the watchdog every ~1m with a cheap process         | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs` |
+| **1s test wake** - run the watchdog every second for measurement             | Task Scheduler starts `arp-worker-watchdog-loop-hidden.vbs` once         |
+| **Metrics logger** - record CPU/RAM/log growth during the 1s test            | Task Scheduler starts `arp-worker-metrics-hidden.vbs` once               |
+| **Spawn a worker run** - a separate, isolated session per order              | `arp-worker-watchdog.js` starts `arp-worker-run-codex.js`                |
+| **Background run + notify on completion** - for long waits                   | the Node runner owns `codex exec`, logs output, and heartbeats           |
+| **Script directory** - where monitor/runner scripts live                     | the installed `arp-worker-flow` skill folder                             |
+| **State directory** - the dedup / heartbeat files                            | `$HOME\.heyarp-worker\`                                                  |
 
 Windows-specific guardrails:
 
 - Use Windows Task Scheduler only for durable recurrence and reboot recovery.
 - Use Node.js for watchdog and worker-run orchestration. Node is already required by `heyarp`, so do not depend on Bash, WSL, Git Bash, or Python.
+- Keep production workers on the one-minute task until the 1-second test data proves the cost is acceptable.
 - Do not use Codex Desktop heartbeat/cron automation for every-minute idle polling. In practice it can start a full Codex/Node runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
 - Only wake a full Codex worker run when the watchdog emits a `NEW` active task or `STALL`.
 - Process `NEW handshake` inline in the watchdog; process worker orders from `heyarp tasks --next --json`.
@@ -79,6 +86,8 @@ Windows-specific guardrails:
 ## 1. Continuous inbox monitor
 
 The watchdog runs every minute and acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
+
+For a 1-second experiment, do not create a Task Scheduler repetition interval of one second. Register the opt-in loop task in section 1b instead. It writes `watchdog-loop.log`, and the separate metrics process writes `metrics.log`.
 
 Three line kinds:
 
@@ -97,10 +106,16 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\SKILL.md
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
+<skillsRoot>\arp-worker-flow\arp-worker-watchdog-loop.js
+<skillsRoot>\arp-worker-flow\arp-worker-watchdog-loop-hidden.vbs
+<skillsRoot>\arp-worker-flow\arp-worker-metrics-logger.js
+<skillsRoot>\arp-worker-flow\arp-worker-metrics-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-run-codex.js
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\monitor.log
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\watchdog-loop.log
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\metrics.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\logs\
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\runs\
 ```
@@ -113,6 +128,10 @@ $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-loop.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-loop-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-logger.js' -OutFile (Join-Path $workerSkill 'arp-worker-metrics-logger.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-metrics-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-codex.js')
 ```
 
@@ -203,6 +222,103 @@ Remove the task:
 $fromDid = 'did:arp:<worker-did>'
 $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
 Unregister-ScheduledTask -TaskName "ARP worker monitor $safeDid" -Confirm:$false
+```
+
+## 1b. Optional 1-second watchdog test with metrics
+
+Use this only when measuring responsiveness and machine cost. Do not run the normal one-minute monitor and the 1-second loop for the same worker DID at the same time.
+
+Register the test loop and the separate metrics logger:
+
+```powershell
+$skillsRoot = "$HOME\.codex\skills"
+$workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
+$loopLauncher = Join-Path $workerSkill 'arp-worker-watchdog-loop-hidden.vbs'
+$metricsLauncher = Join-Path $workerSkill 'arp-worker-metrics-hidden.vbs'
+$workspace = (Get-Location).Path
+
+$fromDid = 'did:arp:<worker-did>' # REQUIRED: use the DID of this worker agent.
+if ($fromDid -notmatch '^did:arp:') {
+  throw 'Set $fromDid to the worker DID before registering the 1s watchdog test.'
+}
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+$loopTaskName = "ARP worker monitor 1s $safeDid"
+$metricsTaskName = "ARP worker metrics 1s $safeDid"
+
+# Avoid mixed measurements from the normal one-minute task.
+Stop-ScheduledTask -TaskName "ARP worker monitor $safeDid" -ErrorAction SilentlyContinue
+
+$loopArgs = "`"$loopLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --loop-interval-seconds 1"
+$metricsArgs = "`"$metricsLauncher`" --state-root `"$stateRoot`" --interval-seconds 1"
+
+$loopAction = New-ScheduledTaskAction `
+  -Execute 'wscript.exe' `
+  -Argument $loopArgs
+
+$metricsAction = New-ScheduledTaskAction `
+  -Execute 'wscript.exe' `
+  -Argument $metricsArgs
+
+$trigger = New-ScheduledTaskTrigger `
+  -Once `
+  -At (Get-Date).AddSeconds(15)
+
+$settings = New-ScheduledTaskSettingsSet `
+  -MultipleInstances IgnoreNew `
+  -StartWhenAvailable `
+  -ExecutionTimeLimit (New-TimeSpan -Days 1)
+
+Register-ScheduledTask `
+  -TaskName $loopTaskName `
+  -Action $loopAction `
+  -Trigger $trigger `
+  -Settings $settings `
+  -Description 'TEST: runs the HeyARP worker watchdog loop every second.' `
+  -Force | Out-Null
+
+Register-ScheduledTask `
+  -TaskName $metricsTaskName `
+  -Action $metricsAction `
+  -Trigger $trigger `
+  -Settings $settings `
+  -Description 'TEST: logs HeyARP worker CPU, RAM, and monitor.log growth every second.' `
+  -Force | Out-Null
+
+Start-ScheduledTask -TaskName $loopTaskName
+Start-ScheduledTask -TaskName $metricsTaskName
+```
+
+Watch the test:
+
+```powershell
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+$stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
+
+Get-Content -LiteralPath (Join-Path $stateRoot 'watchdog-loop.log') -Tail 20
+Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 20
+Get-Content -LiteralPath (Join-Path $stateRoot 'metrics.log') -Tail 20
+```
+
+Each `metrics.log` line is JSONL and includes:
+
+- `cpuPercent` - approximate CPU across tracked worker processes, normalized by logical CPU count.
+- `ramMb` - total working set for tracked worker processes.
+- `monitorLogBytes` - current `monitor.log` size.
+- `monitorLogGrowthBytesPerSec` - recent `monitor.log` growth rate.
+- `trackedProcesses` and `topProcesses` - quick sanity check of what the logger counted.
+
+Stop the 1-second test:
+
+```powershell
+$fromDid = 'did:arp:<worker-did>'
+$safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+
+Stop-ScheduledTask -TaskName "ARP worker monitor 1s $safeDid" -ErrorAction SilentlyContinue
+Stop-ScheduledTask -TaskName "ARP worker metrics 1s $safeDid" -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "ARP worker monitor 1s $safeDid" -Confirm:$false
+Unregister-ScheduledTask -TaskName "ARP worker metrics 1s $safeDid" -Confirm:$false
 ```
 
 ## 2. Dispatch (what the watchdog does each tick)

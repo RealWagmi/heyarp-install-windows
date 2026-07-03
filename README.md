@@ -318,6 +318,10 @@ New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Nu
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-loop.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-loop-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-logger.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-metrics-logger.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-metrics-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-codex.js"
 ```
 
