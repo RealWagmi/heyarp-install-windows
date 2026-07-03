@@ -42,17 +42,19 @@ Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination
 ## Core model
 
 ```text
-Normal: Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Codex worker run per order
-           fresh cheap tick                  health-check first,  accept -> wait lock -> escrow accept -> produce -> respond -> submit-work -> propose -> wait release
-                                             then dispatch, exits idempotent + resumable; uses the buyer's --wait-until mechanics
-                                                    |
-                                                    +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
+Normal: Windows Task Scheduler -> Node SSE daemon -> inbox event? -> one watchdog tick -> start Codex worker run per order
+                                 |                 30s reconcile
+                                 |                 2s active polling during chain/indexer waits
+                                 +-> watchdog health-check first, then dispatch, exits idempotent + resumable
+                                        |
+                                        +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
 
 1s test: Windows Task Scheduler -> Node loop -> watchdog every 1s
                                   separate metrics logger -> CPU/RAM/log growth JSONL
 ```
 
-- **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
+- **The normal monitor is SSE-first.** Windows Task Scheduler starts `arp-worker-sse-daemon.js`; the daemon keeps `heyarp inbox --tail --json` open and runs a watchdog tick immediately on real inbox envelopes.
+- **The watchdog tick is still fresh and cheap.** `arp-worker-watchdog.js` remains the single dispatch/recovery path. The daemon calls it on SSE wakeups, every 30 seconds for safety reconcile, and every 2 seconds only during short active chain/indexer waits.
 - **The 1-second mode is an opt-in test loop, not the default.** Windows Task Scheduler is not a true one-second cron, so the test task starts `arp-worker-watchdog-loop.js` once and that process calls the existing watchdog every second.
 - **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Codex worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
@@ -62,21 +64,24 @@ Normal: Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start
 
 The order logic and every `heyarp` command below are universal. The runtime primitives are adapted to Windows:
 
-| Primitive the skill needs                                                    | Windows implementation                                                   |
-| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Recurring wake** - run the watchdog every ~1m with a cheap process         | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs` |
-| **1s test wake** - run the watchdog every second for measurement             | Task Scheduler starts `arp-worker-watchdog-loop-hidden.vbs` once         |
-| **Metrics logger** - record CPU/RAM/log growth during the 1s test            | Task Scheduler starts `arp-worker-metrics-hidden.vbs` once               |
-| **Spawn a worker run** - a separate, isolated session per order              | `arp-worker-watchdog.js` starts `arp-worker-run-codex.js`                |
-| **Background run + notify on completion** - for long waits                   | the Node runner owns `codex exec`, logs output, and heartbeats           |
-| **Script directory** - where monitor/runner scripts live                     | the installed `arp-worker-flow` skill folder                             |
-| **State directory** - the dedup / heartbeat files                            | `$HOME\.heyarp-worker\`                                                  |
+| Primitive the skill needs                                                    | Windows implementation                                                    |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Realtime wake** - react to buyer inbox messages                            | Task Scheduler starts `wscript arp-worker-sse-daemon-hidden.vbs` once     |
+| **Reconcile wake** - catch missed SSE / chain-indexer transitions            | `arp-worker-sse-daemon.js` runs `arp-worker-watchdog.js` every 30 seconds |
+| **Active chain wait** - check short finalization windows quickly             | daemon runs watchdog every 2 seconds after an inbox event                 |
+| **Fallback recurring wake** - old cheap every-minute monitor                 | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs`  |
+| **1s test wake** - run the watchdog every second for measurement             | Task Scheduler starts `arp-worker-watchdog-loop-hidden.vbs` once          |
+| **Metrics logger** - record CPU/RAM/log growth during the 1s test            | Task Scheduler starts `arp-worker-metrics-hidden.vbs` once                |
+| **Spawn a worker run** - a separate, isolated session per order              | `arp-worker-watchdog.js` starts `arp-worker-run-codex.js`                 |
+| **Background run + notify on completion** - for long waits                   | the Node runner owns `codex exec`, logs output, and heartbeats            |
+| **Script directory** - where monitor/runner scripts live                     | the installed `arp-worker-flow` skill folder                              |
+| **State directory** - the dedup / heartbeat files                            | `$HOME\.heyarp-worker\`                                                   |
 
 Windows-specific guardrails:
 
 - Use Windows Task Scheduler only for durable recurrence and reboot recovery.
 - Use Node.js for watchdog and worker-run orchestration. Node is already required by `heyarp`, so do not depend on Bash, WSL, Git Bash, or Python.
-- Keep production workers on the one-minute task until the 1-second test data proves the cost is acceptable.
+- Prefer the SSE daemon over fast cron. Do not run the SSE daemon and the one-minute fallback task for the same worker DID at the same time.
 - Do not use Codex Desktop heartbeat/cron automation for every-minute idle polling. In practice it can start a full Codex/Node runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
 - Only wake a full Codex worker run when the watchdog emits a `NEW` active task or `STALL`.
 - Process `NEW handshake` inline in the watchdog; process worker orders from `heyarp tasks --next --json`.
@@ -85,7 +90,9 @@ Windows-specific guardrails:
 
 ## 1. Continuous inbox monitor
 
-The watchdog runs every minute and acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
+The normal monitor is a long-running SSE daemon. It keeps `heyarp inbox --tail --json` open and runs the watchdog immediately on real inbox envelopes. It also reconciles every 30 seconds because some actionable transitions come from Solana/indexer state, not inbox envelopes.
+
+The watchdog tick acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
 
 For a 1-second experiment, do not create a Task Scheduler repetition interval of one second. Register the opt-in loop task in section 1b instead. It writes `watchdog-loop.log`, and the separate metrics process writes `metrics.log`.
 
@@ -106,6 +113,8 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\SKILL.md
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
+<skillsRoot>\arp-worker-flow\arp-worker-sse-daemon.js
+<skillsRoot>\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-loop.js
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-loop-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-metrics-logger.js
@@ -114,6 +123,7 @@ Minimal Windows layout:
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\monitor.log
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\sse-daemon.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\watchdog-loop.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\metrics.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\logs\
@@ -128,6 +138,8 @@ $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-sse-daemon.js' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-loop.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-watchdog-loop-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-loop-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-metrics-logger.js' -OutFile (Join-Path $workerSkill 'arp-worker-metrics-logger.js')
@@ -135,54 +147,54 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/worker/arp-worker-run-codex.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-codex.js')
 ```
 
-Register the watchdog:
+Register the normal SSE monitor:
 
 ```powershell
 $skillsRoot = "$HOME\.codex\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
-$hiddenLauncher = Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs'
+$hiddenLauncher = Join-Path $workerSkill 'arp-worker-sse-daemon-hidden.vbs'
 $workspace = (Get-Location).Path
 
 $fromDid = 'did:arp:<worker-did>' # REQUIRED: use the DID of this worker agent.
 if ($fromDid -notmatch '^did:arp:') {
-  throw 'Set $fromDid to the worker DID before registering the watchdog.'
+  throw 'Set $fromDid to the worker DID before registering the monitor.'
 }
 $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
 $taskName = "ARP worker monitor $safeDid"
 $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
-$watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`""
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
-  -Argument $watchdogArgs
+  -Argument $monitorArgs
 
 $trigger = New-ScheduledTaskTrigger `
-  -Once `
-  -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 1) `
-  -RepetitionDuration (New-TimeSpan -Days 3650)
+  -AtLogOn
 
 $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable `
-  -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
 Register-ScheduledTask `
   -TaskName $taskName `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description 'Runs the HeyARP worker Node.js watchdog every minute through a hidden launcher.' `
+  -Description 'Runs the HeyARP worker SSE daemon through a hidden launcher.' `
   -Force | Out-Null
 ```
 
-`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window every minute. The hidden launcher keeps the watchdog tick in the background.
+`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
 The watchdog should:
 
-- Exit immediately when there are no `NEW` or `STALL` lines.
+- The SSE daemon wakes the watchdog on inbox envelopes, every 30 seconds for reconcile, and every 2 seconds during the short active window after an inbox event.
+- The watchdog exits immediately when there are no `NEW` or `STALL` lines.
 - Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
 - Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
 - Keep at most `MAX_JOBS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
@@ -193,6 +205,7 @@ The watchdog should:
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - Never truncate existing state/log files during startup.
 - Log each tick and every dispatch attempt to `<state-root>\monitor.log`.
+- Log SSE lifecycle, reconnects, and wake reasons to `<state-root>\sse-daemon.log`.
 - For each delegation, write diagnostic files under `<state-root>\logs\`:
   - `<delegation-id>.dispatch.log` - dispatcher decisions, stale-lock cleanup, child PID, stdout/stderr paths.
   - `<delegation-id>.runner.log` - runner lifecycle, Codex path, prompt file, heartbeat start/stop, final exit code.
@@ -212,6 +225,7 @@ Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 5
 Get-ScheduledTask -TaskName $taskName
 Get-ScheduledTaskInfo -TaskName $taskName
+Get-Content -LiteralPath (Join-Path $stateRoot 'sse-daemon.log') -Tail 10
 Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 10
 heyarp selftest --role worker
 ```
