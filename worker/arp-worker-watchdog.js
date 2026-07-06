@@ -165,6 +165,67 @@ function getProcessCommandLine(pid) {
   return result.status === 0 ? (result.stdout || '').trim() : '';
 }
 
+function killProcessTree(pid, log, reason) {
+  if (!pid || pid === process.pid) return false;
+  const result = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const details = [
+    (result.stdout || '').trim(),
+    (result.stderr || '').trim(),
+  ].filter(Boolean).join(' | ');
+  if (result.status === 0) {
+    log(`killed runner process tree pid=${pid} reason=${reason}${details ? `; ${details}` : ''}`);
+    return true;
+  }
+  log(`failed to kill runner process tree pid=${pid} reason=${reason} exit=${result.status}${details ? `; ${details}` : ''}`);
+  return false;
+}
+
+function killRelatedDelegationProcesses(delegationId, log, reason) {
+  if (!delegationId) return;
+  const escaped = delegationId.replace(/'/g, "''");
+  const ps = [
+    '-NoProfile',
+    '-Command',
+    [
+      `$needle = '${escaped}'`,
+      '$self = $PID',
+      'Get-CimInstance Win32_Process | Where-Object {',
+      '  $_.ProcessId -ne $self -and',
+      "  $_.Name -ne 'powershell.exe' -and",
+      '  $_.CommandLine -and',
+      '  $_.CommandLine.Contains($needle) -and',
+      '  ($_.CommandLine.Contains("heyarp") -or $_.CommandLine.Contains("arp-worker-run-hermes.js") -or $_.CommandLine.Contains("hermes.exe"))',
+      '} | Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress',
+    ].join('; '),
+  ];
+  const result = spawnSync('powershell.exe', ps, { encoding: 'utf8', windowsHide: true });
+  if (result.status !== 0 || !(result.stdout || '').trim()) return;
+
+  let rows;
+  try {
+    rows = JSON.parse(result.stdout);
+  } catch (_) {
+    return;
+  }
+  const processes = Array.isArray(rows) ? rows : [rows];
+  for (const proc of processes) {
+    const pid = Number(proc && proc.ProcessId);
+    if (!pid || pid === process.pid) continue;
+    const killed = spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    const details = [
+      (killed.stdout || '').trim(),
+      (killed.stderr || '').trim(),
+    ].filter(Boolean).join(' | ');
+    log(`killed related delegation process pid=${pid} name=${proc.Name || ''} reason=${reason} exit=${killed.status}${details ? `; ${details}` : ''}`);
+  }
+}
+
 // Parse a lock file such as:
 //   pid=1234 started=... delegation=... relationship=...
 function readLock(lockFile) {
@@ -188,6 +249,58 @@ function isActiveWorker(lockFile, delegationId) {
   return commandLine.includes('arp-worker-run-hermes.js') && commandLine.includes(delegationId);
 }
 
+function terminalReasonFromDelegation(record) {
+  if (!record) return '';
+  const releaseStatus = String(record.releaseStatus || '').toLowerCase();
+  if (['paid', 'refunded'].includes(releaseStatus)) return `releaseStatus=${releaseStatus}`;
+
+  const state = String(record.state || '').toLowerCase();
+  if (['cancelled', 'canceled', 'declined', 'refunded'].includes(state)) return `delegationState=${state}`;
+
+  return '';
+}
+
+function terminalReasonFromEscrow(record) {
+  if (!record) return '';
+  const state = String(record.state || record.lockState || '').toLowerCase();
+  if (['paid', 'refunded', 'cancelled', 'canceled', 'revoked'].includes(state)) return `escrowState=${state}`;
+  return '';
+}
+
+function getEconomicTerminalReason(delegationId, relationshipId, fromDid, log) {
+  if (relationshipId) {
+    const delegations = runHeyarpJson(withFromDid(['delegations', relationshipId, '--json'], fromDid), log, `delegation terminal read ${delegationId}`);
+    const delegation = delegations.find((item) => item && item.delegationId === delegationId);
+    const reason = terminalReasonFromDelegation(delegation);
+    if (reason) return reason;
+  }
+
+  const escrowRows = runHeyarpJson(withFromDid(['escrow', 'show', delegationId, '--json'], fromDid), log, `escrow terminal read ${delegationId}`);
+  const escrow = escrowRows[0];
+  return terminalReasonFromEscrow(escrow);
+}
+
+function cleanupTerminalActiveLocks(paths, fromDid, log) {
+  if (!fs.existsSync(paths.runsRoot)) return;
+  for (const entry of fs.readdirSync(paths.runsRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.lock')) continue;
+    const delegationId = entry.name.slice(0, -'.lock'.length);
+    const lockFile = path.join(paths.runsRoot, entry.name);
+    const lock = readLock(lockFile);
+    const pid = Number(lock.fields && lock.fields.pid);
+    if (!pid || !isActiveWorker(lockFile, delegationId)) continue;
+
+    const relationshipId = lock.fields && lock.fields.relationship;
+    const reason = getEconomicTerminalReason(delegationId, relationshipId, fromDid, log);
+    if (!reason) continue;
+
+    killProcessTree(pid, log, `${delegationId}:${reason}`);
+    killRelatedDelegationProcesses(delegationId, log, `${delegationId}:${reason}`);
+    fs.rmSync(lockFile, { force: true });
+    log(`removed terminal runner lock delegation=${delegationId} pid=${pid} reason=${reason}`);
+  }
+}
+
 // Count live per-delegation jobs by checking lock files against real processes.
 // Capacity checks use this so one busy machine does not spawn too many runner jobs.
 function countActiveJobs(paths) {
@@ -200,6 +313,11 @@ function countActiveJobs(paths) {
     if (isActiveWorker(lockFile, delegationId)) count += 1;
   }
   return count;
+}
+
+function isAwaitingAcceptance(task) {
+  return task.phase === 'awaiting_acceptance'
+    || (task.state === 'offered' && task.nextActionOwner === 'me');
 }
 
 function isWorkerLine(line) {
@@ -305,8 +423,8 @@ function startWorkerRun(context, paths, workspace, log) {
 }
 
 // Handle one normalized watchdog line.
-// STALL starts a replacement worker, NEW either accepts a handshake inline or
-// starts a new worker run.
+// STALL starts a replacement worker, ACCEPT accepts an offer inline, and NEW
+// either accepts a handshake inline or starts a funded/executable worker run.
 function handleLine(line, paths, workspace, log, fromDid) {
   const parts = line.split('\t');
   const kind = parts[0];
@@ -317,6 +435,20 @@ function handleLine(line, paths, workspace, log, fromDid) {
       delegationId: parts[2],
       fromDid,
     }, paths, workspace, log);
+  }
+
+  if (kind === 'ACCEPT') {
+    const relationshipId = parts[1];
+    const delegationId = parts[2];
+    const result = runShell('heyarp', withFromDid([
+      'delegation',
+      'accept',
+      relationshipId,
+      delegationId,
+    ], fromDid));
+    if (result.status !== 0) throw new Error(`delegation accept failed: ${(result.stderr || '').trim()}`);
+    log(`ACCEPT delegation accepted relationship=${relationshipId} delegation=${delegationId}`);
+    return false;
   }
 
   if (kind !== 'NEW') return false;
@@ -378,7 +510,7 @@ function main() {
       const line = parts.join('\t');
       lines.push(line);
       const kind = parts[0];
-      const delegationId = kind === 'STALL' ? parts[2] : parts[5];
+      const delegationId = kind === 'STALL' || kind === 'ACCEPT' ? parts[2] : parts[5];
       if (delegationId) queuedDelegations.add(delegationId);
     };
 
@@ -396,15 +528,21 @@ function main() {
 
     // Server-side active tasks are scoped to this worker DID and filtered to
     // rows where nextActionOwner=me. It replaces the old relationships ->
-    // delegations crawl and makes terminal cleanup unnecessary: completed or
-    // canceled delegations simply disappear from this active-task view.
+    // delegations crawl for normal dispatch, while terminal lock cleanup below
+    // handles local runner processes that outlive paid/refunded/canceled jobs.
     const tasks = runHeyarpJson(withFromDid(['tasks', '--next', '--json'], fromDid), log, 'tasks read');
+    cleanupTerminalActiveLocks(paths, fromDid, log);
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
     for (const task of tasks) {
       const delegationId = task.delegationId || '';
       const relationshipId = task.relationshipId || '';
       if (!delegationId || !relationshipId || queuedDelegations.has(delegationId)) continue;
+
+      if (isAwaitingAcceptance(task)) {
+        pushLine(['ACCEPT', relationshipId, delegationId, task.state || task.phase || 'offered']);
+        continue;
+      }
 
       if (dispatched.has(delegationId)) {
         const age = now - dispatched.get(delegationId);
@@ -439,7 +577,7 @@ function main() {
     // Job-starting lines respect capacity. If capacity is full, do not mark
     // the event seen; the next watchdog tick can retry it.
     let activeJobs = countActiveJobs(paths);
-    for (const kind of ['STALL', 'NEW']) {
+    for (const kind of ['STALL', 'ACCEPT', 'NEW']) {
       for (const line of lines.filter((candidate) => candidate.startsWith(`${kind}\t`))) {
         if (isWorkerLine(line) && activeJobs >= maxJobs) {
           log(`job capacity full active=${activeJobs} max=${maxJobs}; retry next tick line=${line}`);

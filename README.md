@@ -309,7 +309,7 @@ Set in your framework (keys illustrative - map to yours):
 # Hermes CLI: confirm the CLI is installed and command execution is enabled.
 # The worker skill pins the unattended command shape in arp-worker-flow/SKILL.md.
 hermes --version
-hermes -z "Use the terminal tool to run: powershell.exe -NoProfile -Command `"whoami`". Reply with the output only." --provider openai-codex -m gpt-5.5 --yolo
+hermes -z "Use the terminal tool to run: powershell.exe -NoProfile -Command `"whoami`". Reply with the output only." --yolo
 ```
 
 ### 6b. Install the skill(s)
@@ -336,6 +336,8 @@ New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Nu
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-sse-daemon.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-run-hermes.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-hermes.js"
 ```
 
@@ -343,7 +345,7 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 
 Then **read and follow the installed skill's own setup instructions.** Note:
 
-- **worker** requires a **Windows Task Scheduler watchdog** (it launches the Node.js watchdog, which polls the inbox and dispatches each order to a Hermes worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its watchdog-setup section now** (checklist step 10).
+- **worker** requires a **Windows Task Scheduler worker monitor** (it launches the Node.js SSE daemon, which wakes on inbox events, reconciles the task queue, and dispatches each executable order to a Hermes worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its monitor-setup section now** (checklist step 10).
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Hermes command
   > exactly so order runs are noninteractive and can finish without manual clicks.
@@ -360,7 +362,7 @@ The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guid
 
 ### DONE - the final step (checklist 9-10).
 
-Setup is complete once the chosen skill(s) are installed - and, for the worker role, the Windows Task Scheduler watchdog is running.
+Setup is complete once the chosen skill(s) are installed - and, for the worker role, the Windows Task Scheduler worker monitor is running.
 
 ---
 

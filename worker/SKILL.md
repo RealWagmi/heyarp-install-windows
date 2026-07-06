@@ -42,15 +42,17 @@ Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination
 ## Core model
 
 ```text
-Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Hermes worker run per order
-   fresh cheap tick                  health-check first,  accept -> wait lock -> escrow accept -> produce -> respond -> submit-work -> propose -> wait release
-                                     then dispatch, exits idempotent + resumable; uses the buyer's --wait-until mechanics
-                                            |
-                                            +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
+Normal: Windows Task Scheduler -> Node SSE daemon -> inbox event? -> one watchdog tick -> start Hermes worker run per executable order
+                                 |                 30s reconcile
+                                 |                 2s active polling during chain/indexer waits
+                                 +-> watchdog health-check first, then dispatch, exits idempotent + resumable
+                                        |
+                                        +-> STALLED order, worker run died? -> start a fresh worker run that resumes from state
 ```
 
-- **A scheduler tick is a fresh cheap process.** It cannot wake your live chat. Windows Task Scheduler wakes `arp-worker-watchdog.js` each tick. Empty inbox and healthy tracked orders -> exit quickly.
-- **One worker run per order.** The watchdog does NOT process orders itself (a single order can take minutes/hours waiting on the buyer). It hands each order to its own Hermes worker run and returns to watching, so many orders progress in parallel and the watchdog stays cheap.
+- **The normal monitor is SSE-first.** Windows Task Scheduler starts `arp-worker-sse-daemon.js`; the daemon keeps `heyarp inbox --tail --json` open and runs a watchdog tick immediately on real inbox envelopes.
+- **The watchdog tick is still fresh and cheap.** `arp-worker-watchdog.js` remains the single dispatch/recovery path. The daemon calls it on SSE wakeups, every 30 seconds for safety reconcile, and every 2 seconds only during short active chain/indexer waits.
+- **One worker run per executable order.** The watchdog handles cheap protocol steps itself (handshake accept and default delegation accept). It starts Hermes only when the job is funded/actionable, so buyer funding delays do not consume runner capacity.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
 - **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It starts only up to `MAX_JOBS` live runner processes.
 
@@ -58,34 +60,41 @@ Windows Task Scheduler every ~1m -> Node watchdog -> NEW order? -> start Hermes 
 
 The order logic and every `heyarp` command below are universal. The runtime primitives are adapted to Windows:
 
-| Primitive the skill needs                                                   | Windows implementation                                                   |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| **Recurring wake** - run the watchdog every ~1m with a cheap process        | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs` |
-| **Spawn a worker run** - a separate, isolated session per order             | `arp-worker-watchdog.js` starts `arp-worker-run-hermes.js`               |
-| **Background run + notify on completion** - for long waits                  | the Node runner owns `hermes -z`, logs output, and heartbeats            |
-| **Script directory** - where monitor/runner scripts live                    | the installed `arp-worker-flow` skill folder                             |
-| **State directory** - the dedup / heartbeat files                           | `$HOME\.heyarp-worker\`                                                  |
+| Primitive the skill needs                                         | Windows implementation                                                    |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Realtime wake** - react to buyer inbox messages                 | Task Scheduler starts `wscript arp-worker-sse-daemon-hidden.vbs` once     |
+| **Reconcile wake** - catch missed SSE / chain-indexer transitions | `arp-worker-sse-daemon.js` runs `arp-worker-watchdog.js` every 30 seconds |
+| **Active chain wait** - check short finalization windows quickly  | daemon runs watchdog every 2 seconds after an inbox event                 |
+| **Fallback recurring wake** - old cheap every-minute monitor      | Windows Task Scheduler launches `wscript arp-worker-watchdog-hidden.vbs`  |
+| **Spawn a worker run** - a separate, isolated session per order   | `arp-worker-watchdog.js` starts `arp-worker-run-hermes.js`                |
+| **Background run + notify on completion** - for long waits        | the Node runner owns `hermes -z`, logs output, and heartbeats             |
+| **Script directory** - where monitor/runner scripts live          | the installed `arp-worker-flow` skill folder                              |
+| **State directory** - the dedup / heartbeat files                 | `$HOME\.heyarp-worker\`                                                   |
 
 Windows-specific guardrails:
 
 - Use Windows Task Scheduler only for durable recurrence and reboot recovery.
 - Use Node.js for watchdog and worker-run orchestration. Node is already required by `heyarp`, so do not depend on Bash, WSL, Git Bash, or Python.
+- Prefer the SSE daemon over fast cron. Do not run the SSE daemon and the one-minute fallback task for the same worker DID at the same time.
 - Do not use Hermes itself for every-minute idle polling. In practice it can start a full model/tool runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
-- Only wake a full Hermes worker run when the watchdog emits a `NEW` active task or `STALL`.
-- Process `NEW handshake` inline in the watchdog; process worker orders from `heyarp tasks --next --json`.
-- Treat lock files as hints, not proof of a live worker. If no real `node ...arp-worker-run-hermes.js ...<delegationId>` process exists for that delegation, remove the stale lock and re-dispatch.
+- Only wake a full Hermes worker run when the watchdog emits a funded/executable `NEW` active task or `STALL`.
+- Process `NEW handshake` and default delegation acceptance inline in the watchdog; process funded/executable worker orders from `heyarp tasks --next --json`.
+- Treat lock files as hints, not proof of useful work. If no real `node ...arp-worker-run-hermes.js ...<delegationId>` process exists for that delegation, remove the stale lock and re-dispatch. If the runner process is still alive but the delegation is economically terminal (`releaseStatus=paid/refunded`, escrow `paid/refunded/revoked`, or delegation `cancelled/declined/refunded`), kill the runner process tree, kill delegation-specific orphan `heyarp`/Hermes wait processes, and remove the lock.
 - Every scheduled worker task must be pinned to exactly one worker DID. Always pass `--from-did <worker-did>` and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the watchdog from breaking later when another agent is added to the same `%USERPROFILE%\.heyarp\agents.json`.
 
 ## 1. Continuous inbox monitor
 
-The watchdog runs every minute and acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
+The normal monitor is a long-running SSE daemon. It keeps `heyarp inbox --tail --json` open and runs the watchdog immediately on real inbox envelopes. It also reconciles every 30 seconds because some actionable transitions come from Solana/indexer state, not inbox envelopes.
+
+The watchdog tick acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
 
 Three line kinds:
 
-| Line                                                       | Meaning                                                                     | Watchdog does      |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------ |
-| `NEW   <rel> <type> <eventId> <senderDid> <delId> <reqId>` | a fresh handshake or server-reported active task                            | dispatch (2b)      |
-| `STALL <rel> <delId> <state> <age_min>`                    | non-terminal order, no worker heartbeat for `STALL_MIN`; worker likely died | re-dispatch (2a)   |
+| Line                                                       | Meaning                                                                     | Watchdog does |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------- | -------------- |
+| `NEW   <rel> <type> <eventId> <senderDid> <delId> <reqId>` | a fresh handshake or server-reported active task                            | dispatch (2b)  |
+| `ACCEPT <rel> <delId> <state>`                             | default worker policy says accept this offered delegation                   | accept inline  |
+| `STALL <rel> <delId> <state> <age_min>`                    | non-terminal order, no worker heartbeat for `STALL_MIN`; worker likely died | re-dispatch    |
 
 `STALL_MIN` defaults to 3 minutes. Override it only when needed by passing `--stall-min <minutes>` to `arp-worker-watchdog.js`. A stale heartbeat does not emit `STALL` while the per-delegation runner process is still alive.
 
@@ -97,10 +106,13 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\SKILL.md
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog.js
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
+<skillsRoot>\arp-worker-flow\arp-worker-sse-daemon.js
+<skillsRoot>\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-run-hermes.js
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\monitor.log
+%USERPROFILE%\.heyarp-worker\<safe-worker-did>\sse-daemon.log
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\logs\
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\runs\
 ```
@@ -114,63 +126,66 @@ $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
 New-Item -ItemType Directory -Force -Path $workerSkill | Out-Null
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog.js' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-sse-daemon.js' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon.js')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/worker/arp-worker-run-hermes.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-hermes.js')
 ```
 
-Register the watchdog:
+Register the normal SSE monitor:
 
 ```powershell
 $skillsRoot = "$env:LOCALAPPDATA\hermes\skills"
 $workerSkill = Join-Path $skillsRoot 'arp-worker-flow'
-$hiddenLauncher = Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs'
+$hiddenLauncher = Join-Path $workerSkill 'arp-worker-sse-daemon-hidden.vbs'
 $workspace = (Get-Location).Path
 
 $fromDid = 'did:arp:<worker-did>' # REQUIRED: use the DID of this worker agent.
 if ($fromDid -notmatch '^did:arp:') {
-  throw 'Set $fromDid to the worker DID before registering the watchdog.'
+  throw 'Set $fromDid to the worker DID before registering the monitor.'
 }
 $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
 $taskName = "ARP worker monitor $safeDid"
 $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
-$watchdogArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`""
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
-  -Argument $watchdogArgs
+  -Argument $monitorArgs
 
 $trigger = New-ScheduledTaskTrigger `
   -Once `
-  -At (Get-Date).AddMinutes(1) `
-  -RepetitionInterval (New-TimeSpan -Minutes 1) `
-  -RepetitionDuration (New-TimeSpan -Days 3650)
+  -At (Get-Date).AddSeconds(15)
 
 $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable `
-  -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+  -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
 Register-ScheduledTask `
   -TaskName $taskName `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description 'Runs the HeyARP worker Node.js watchdog every minute through a hidden launcher.' `
+  -Description 'Runs the HeyARP worker Node.js SSE monitor through a hidden launcher.' `
   -Force | Out-Null
 ```
 
-`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window every minute. The hidden launcher keeps the watchdog tick in the background.
+`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the monitor in the background.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
 The watchdog should:
 
-- Exit immediately when there are no `NEW` or `STALL` lines.
+- The SSE daemon wakes the watchdog on inbox envelopes, every 30 seconds for reconcile, and every 2 seconds during the short active window after an inbox event.
+- The watchdog exits immediately when there are no `NEW`, `ACCEPT`, or `STALL` lines.
 - Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
 - Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
-- Keep at most `MAX_JOBS` live runner processes. If capacity is full, leave the event un-seen and retry on the next tick.
+- Keep at most `MAX_JOBS` live runner processes. This limit applies only to real Hermes runner processes, not inline handshake/delegation acceptance or buyer funding waits.
+- Treat `accepted` / `awaiting_fund` as buyer-owned waiting time. Do not start Hermes while waiting for buyer funding; the SSE daemon and 30-second reconcile will pick the job back up when it becomes funded/actionable.
 - Pass `--from-did <worker-did>` to every HeyARP read/action, and pass the same DID into the worker run prompt.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
-- For `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-hermes.js`; the watchdog itself must not merely queue the event and stop.
+- Process default `offered` / `awaiting_acceptance` task rows inline with `heyarp delegation accept <rel-id> <delegation-id>`. Custom pricing or custom accept/decline policy is outside this default flow and belongs to the user's own worker logic.
+- For funded/actionable `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-hermes.js`; the watchdog itself must not merely queue the event and stop.
 - Append `delegationId<TAB>epoch` to `dispatched.txt` only after the worker run is started or resumed.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - Never truncate existing state/log files during startup.
@@ -194,6 +209,7 @@ Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 5
 Get-ScheduledTask -TaskName $taskName
 Get-ScheduledTaskInfo -TaskName $taskName
+Get-Content -LiteralPath (Join-Path $stateRoot 'sse-daemon.log') -Tail 10
 Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 10
 heyarp selftest --role worker
 ```
@@ -208,7 +224,7 @@ Unregister-ScheduledTask -TaskName "ARP worker monitor $safeDid" -Confirm:$false
 
 ## 2. Dispatch (what the watchdog does each tick)
 
-Handle watchdog lines in this order: **STALL -> NEW** (recover before taking on new work).
+Handle watchdog lines in this order: **STALL -> ACCEPT -> NEW** (recover before taking on new executable work, but accept cheap offers inline).
 
 ### 2a. `STALL` - active task, worker run went silent -> re-dispatch
 
@@ -224,7 +240,9 @@ This is safe: the worker run first **reads the current state and resumes** (3b) 
   heyarp send-handshake-response <senderDid> --decision accept --notes "Ready to take your order."
   ```
 
-- **task row from `heyarp tasks --next --json`** -> **start a worker run** (separate process), pass it the order context and tell it to run section 3 to completion. Record the dispatch only after the process starts.
+- **`offered` / `awaiting_acceptance` task row from `heyarp tasks --next --json`** -> accept inline with `heyarp delegation accept <rel-id> <delegation-id>`. This does not count against `MAX_JOBS`.
+
+- **funded/actionable task row from `heyarp tasks --next --json`** -> **start a worker run** (separate process), pass it the order context and tell it to run section 3 to completion. Record the dispatch only after the process starts.
 
 The watchdog gets task IDs from the server's active task row, not from inbox delegation/work_request events.
 
@@ -243,14 +261,15 @@ Mirror of the buyer flow, "my-turn" side. Wait for the buyer's moves with the sa
 Worker-run guardrails:
 
 - Create a per-delegation lock file under `<state-root>\runs\` before launching the selected runner; if the lock is held, skip the duplicate event only when the PID still belongs to a live worker runner for that delegation.
-- Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched.
+- Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched. Live-but-finished locks are also cleaned: when ARP state proves the job is economically terminal (`releaseStatus=paid/refunded`, escrow `paid/refunded/revoked`, or delegation `cancelled/declined/refunded`), the watchdog kills the runner process tree plus delegation-specific orphan `heyarp`/Hermes wait processes, then removes the lock. Do **not** use plain delegation `completed` alone as a cleanup trigger because the worker may still need buyer release or self-claim.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
-- Keep the worker run responsible for the full order cycle: `delegation accept` -> wait lock -> `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
+- Keep the worker run responsible for the funded/executable part of the cycle: `escrow accept` -> wait work request -> produce -> `work respond` -> `escrow submit-work` -> `receipt propose` -> wait release/self-claim.
+- If a Hermes runner sees the exact delegation still `offered` or `accepted`/`awaiting_fund` with no escrow lock, it should stop cleanly. The watchdog owns default offer acceptance and buyer funding waits.
 - Pin a known-working model/provider for unattended runs. If `ARP_WORKER_HERMES_PROVIDER` and/or `ARP_WORKER_HERMES_MODEL` are set, the runner passes them to Hermes; if they are omitted, Hermes uses its own configured default provider/model. Optionally set `ARP_WORKER_HERMES_SKILLS` (default: `arp-worker-flow`).
 - Keep heartbeating while the runner is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
-- Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
+- Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON. Use the `responseJsonFile` path provided by the runner prompt; do not create response/output JSON files in the workspace/repo root.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
-- When the cycle reaches terminal state, it disappears from `heyarp tasks --next --json`; no local terminal cleanup is needed.
+- When the cycle reaches economic terminal state, it disappears from `heyarp tasks --next --json`. The watchdog still checks live locks against terminal payment state, because a `hermes -z` / `heyarp status --wait` child can stay alive after payment and must not consume a worker slot forever.
 
 Hermes adapter notes:
 
@@ -328,7 +347,7 @@ A re-spawned worker run (from a `STALL` re-dispatch, section 2b) recovers from i
 3. `heyarp work-list <rel-id> --json` + `heyarp receipts <rel-id> --json` -> work / receipt state.
 4. Jump to the **next pending** step; skip everything already done (use the section 3a guards); then continue with the normal `--wait-until` waits.
 
-State -> next step: delegation `offered` -> `delegation accept`; `accepted` -> wait `delegation.locked`; `locked` + lock `created` -> `escrow accept`; lock `in_progress` + work-log `requested` -> produce + `work respond`; work-log `responded` + lock `in_progress` -> `escrow submit-work`; lock `submitted`, no receipt -> `receipt propose`; receipt `proposed` -> wait `cycle.released`; lock `disputing` -> see section 5 (poll, or `escrow dispute close` after the window lapses). This is what makes re-dispatch safe.
+State -> next step: delegation `offered` -> stop; the watchdog accepts offers inline. Delegation `accepted` with no lock -> stop; the watchdog/SSE daemon waits for buyer funding. `locked` + lock `created` -> `escrow accept`; lock `in_progress` + work-log `requested` -> produce + `work respond`; work-log `responded` + lock `in_progress` -> `escrow submit-work`; lock `submitted`, no receipt -> `receipt propose`; receipt `proposed` -> wait `cycle.released`; lock `disputing` -> see section 5 (poll, or `escrow dispute close` after the window lapses). This is what makes re-dispatch safe.
 
 ## 4. Security (worker side)
 
@@ -346,8 +365,8 @@ State -> next step: delegation `offered` -> `delegation accept`; `accepted` -> w
 
 | Symptom                                                            | Likely cause                                                                    | Fix                                                                                               |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Delegation stuck at `offered`                                      | worker run crashed before `delegation accept`                                   | health-check re-dispatches after `STALL_MIN`; new worker run accepts                              |
-| Delegation stuck at `accepted`                                     | worker run died after accept / buyer slow to fund                               | if alive it heartbeats; if dead, re-dispatched -> resumes waiting                                 |
+| Delegation stuck at `offered`                                      | watchdog could not run inline `delegation accept`                               | next SSE/reconcile tick retries inline acceptance                                                 |
+| Delegation stuck at `accepted`                                     | buyer slow to fund                                                              | no runner slot is consumed; SSE/reconcile sees it again after funding                             |
 | `locked` + on-chain lock `created`                                 | worker run crashed before on-chain `escrow accept`                              | re-dispatched worker reads on-chain state and runs `escrow accept`                                |
 | `locked` + work-log `requested`, no response                       | worker run crashed before `work respond`                                        | re-dispatched worker reads state, produces output, responds                                       |
 | work-log `responded` + lock `in_progress`                          | worker run crashed before on-chain `escrow submit-work`                         | re-dispatched worker runs `escrow submit-work`                                                    |
@@ -364,6 +383,8 @@ State -> next step: delegation `offered` -> `delegation accept`; `accepted` -> w
 | handler reads the wrong delegation state                            | code took first delegation row instead of filtering by ID                       | filter by exact delegation ID                                                                    |
 | on-chain lock state is `disputing`                                  | buyer opened on-chain dispute                                                   | keep heartbeating and polling; do not treat it as stalled                                         |
 | on-chain lock stuck in `disputing`, expired, operator never resolved | dispute window lapsed with no operator ruling                                   | after deadline, either party may run `heyarp escrow dispute close <delegation-id>`                |
+
+If a live runner keeps a slot after payment, `hermes -z` or a child `heyarp status --wait` probably did not exit after economic terminal state. The watchdog kills the runner process tree, kills delegation-specific orphan `heyarp`/Hermes wait processes, and removes the lock when `releaseStatus`, escrow state, or delegation state proves payment/refund/cancel/decline is final.
 
 ## 6. Monitoring methods & FSM phases
 
