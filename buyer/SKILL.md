@@ -80,13 +80,17 @@ Strict first request:
 Example:
 
 ```powershell
-$briefFile = Join-Path $env:TEMP 'arp_brief.json'
-[System.IO.File]::WriteAllText(
-  $briefFile,
-  '{ "type": "task", "message": "Describe the requested work here. Use placeholders only for secrets." }',
-  [System.Text.UTF8Encoding]::new($false)
-)
-$BRIEF = Get-Content -LiteralPath $briefFile -Raw
+$briefObject = [ordered]@{
+  type = 'task'
+  message = 'Describe the requested work here. Use placeholders only for secrets.'
+}
+
+# Windows PowerShell 5 can strip JSON quotes when passing native command args.
+# Keep the brief as one argument by using compact JSON, escaping quotes, and
+# encoding literal spaces as \u0020. JSON parsing restores the spaces server-side.
+$BRIEF = ($briefObject | ConvertTo-Json -Compress) -replace ' ', '\u0020'
+$BRIEF = $BRIEF -replace '"', '\"'
+
 heyarp delegation offer did:arp:<worker-did> `
   --delegation-id $DELEGATION_ID `
   --title "..." --scope "..." `
