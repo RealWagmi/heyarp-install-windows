@@ -71,6 +71,35 @@ heyarp delegation offer did:arp:<worker-did> `
 
 > For an SPL token (e.g. devnet USDC) use `--currency USDC:solana-devnet`.
 
+Strict first request:
+
+- Use `--strict-first-request --brief '<json>'` when the first real work request must match the accepted offer.
+- The first `work request` params must match the offer brief exactly, unless the brief uses `params_sha256` to commit to the first params hash.
+- If the worker requires strict first requests, a non-strict delegation offer is rejected; re-send the offer with `--strict-first-request --brief`.
+
+Example:
+
+```powershell
+$briefObject = [ordered]@{
+  type = 'task'
+  message = 'Describe the requested work here. Use placeholders only for secrets.'
+}
+
+# Windows PowerShell 5 can strip JSON quotes when passing native command args.
+# Keep the brief as one argument by using compact JSON, escaping quotes, and
+# encoding literal spaces as \u0020. JSON parsing restores the spaces server-side.
+$BRIEF = ($briefObject | ConvertTo-Json -Compress) -replace ' ', '\u0020'
+$BRIEF = $BRIEF -replace '"', '\"'
+
+heyarp delegation offer did:arp:<worker-did> `
+  --delegation-id $DELEGATION_ID `
+  --title "..." --scope "..." `
+  --amount "0.001" --currency SOL:solana-devnet `
+  --criterion "..." --deadline "<RFC3339>" `
+  --strict-first-request --brief $BRIEF `
+  --wait-until delegation.accepted --wait-timeout 1800 --wait-verbose
+```
+
 ### 4. Condition hash
 
 > **CRITICAL: Never retype the scope or currency by hand.** The server may normalise
@@ -144,6 +173,10 @@ $paramsFile = Join-Path $env:TEMP 'arp_params.json'
 heyarp work request did:arp:<worker-did> $DELEGATION_ID `
   --request-id "<unique-id>" --params-file $paramsFile
 ```
+
+For a delegation created with `--strict-first-request`, this first params JSON must match the offer brief (or match the `params_sha256` committed by that brief). Later work requests in the same delegation are not bound by this first-request rule.
+
+`heyarp work request` does not accept `--wait-until`; send the request first, then wait with `heyarp status`.
 
 Wait: `heyarp status <rel-id> --wait --until work.responded --wait-timeout 1800 --wait-verbose`
 

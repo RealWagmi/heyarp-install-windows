@@ -58,6 +58,8 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/install.ps1' | Invoke-Expression
 ```
 
+> The buyer/worker skills use recent `heyarp` features such as `--strict-first-request` and `agents accept-prefs --require-strict-first-request`. If a command says one of these flags is unknown, update `@heyanon-arp/cli` and retry.
+
 > **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
 >
 > ```powershell
