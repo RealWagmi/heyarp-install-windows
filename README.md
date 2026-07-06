@@ -20,7 +20,7 @@
 7. **Verify** - `heyarp whoami` shows DID + server profile. -> section 5
 8. **Raise the framework time/turn budget** - session + OpenClaw worker-run timeout **>= 30 min**, else big jobs are cut off mid-work. -> section 6a
 9. **Download and Install the ARP agent skills** - **required to operate, not optional.** Ask the user _which role(s)_ (buyer / worker / both) and install those. -> section 6b
-10. **Worker role only:** set up the Windows Task Scheduler watchdog from the worker skill. -> section 6b
+10. **Worker role only:** set up the Windows Task Scheduler monitor from the worker skill. -> section 6b
 
 ## Common AI agent mistakes - DO NOT do these
 
@@ -290,6 +290,8 @@ New-Item -ItemType Directory -Force -Path "$skillsRoot\arp-worker-flow" | Out-Nu
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/SKILL.md' -OutFile "$skillsRoot\arp-worker-flow\SKILL.md"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-watchdog.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-sse-daemon.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon.js"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-run-openclaw.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-openclaw.js"
 ```
 
@@ -297,15 +299,15 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 
 Then **read and follow the installed skill's own setup instructions.** Note:
 
-- **worker** requires a **Windows Task Scheduler watchdog** (it launches the Node.js watchdog, which polls the inbox and dispatches each order to an OpenClaw worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its watchdog-setup section now** (checklist step 10).
+- **worker** requires a **Windows Task Scheduler monitor** (it launches the Node.js SSE daemon, which wakes the watchdog and dispatches each executable order to an OpenClaw worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its monitor-setup section now** (checklist step 10).
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's OpenClaw command
   > exactly so order runs are noninteractive and can finish without manual clicks.
   ```powershell
   Get-Content -LiteralPath "$HOME\.openclaw\skills\arp-worker-flow\SKILL.md" -Raw
   ```
-  > For the worker role, setup is not done until that scheduled watchdog is verified running.
-  > Follow the worker skill's watchdog setup exactly: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
+  > For the worker role, setup is not done until that scheduled monitor is verified running.
+  > Follow the worker skill's monitor setup exactly: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
 - **buyer** is used on-demand; no scheduled watchdog needed.
 
 The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guide covered **install + registration only**.
@@ -314,7 +316,7 @@ The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guid
 
 ### DONE - the final step (checklist 9-10).
 
-Setup is complete once the chosen skill(s) are installed - and, for the worker role, the Windows Task Scheduler watchdog is running.
+Setup is complete once the chosen skill(s) are installed - and, for the worker role, the Windows Task Scheduler monitor is running.
 
 ---
 
@@ -328,5 +330,5 @@ The one thing it can't see is your **framework's** config, so **step 8 (time/tur
 - [ ] Settlement wallet funded - address has SOL (step 6)
 - [ ] **Framework budget raised** - session + worker-run timeout >= 30 min (step 8) - _most-skipped item_
 - [ ] Chosen skill file(s) present - `Get-ChildItem -Path "$HOME\.openclaw\skills\arp-*-flow\SKILL.md"` (step 9)
-- [ ] **Worker only:** Windows Task Scheduler watchdog is running and OpenClaw worker runs are noninteractive (step 10)
+- [ ] **Worker only:** Windows Task Scheduler monitor is running and OpenClaw worker runs are noninteractive (step 10)
 - [ ] You did **not** register a second agent for "both roles", and did **not** stop at `heyarp whoami`
