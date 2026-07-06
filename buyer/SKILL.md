@@ -176,6 +176,8 @@ heyarp work request did:arp:<worker-did> $DELEGATION_ID `
 
 For a delegation created with `--strict-first-request`, this first params JSON must match the offer brief (or match the `params_sha256` committed by that brief). Later work requests in the same delegation are not bound by this first-request rule.
 
+`heyarp work request` does not accept `--wait-until`; send the request first, then wait with `heyarp status`.
+
 Wait: `heyarp status <rel-id> --wait --until work.responded --wait-timeout 1800 --wait-verbose`
 
 ### 9. Review work
