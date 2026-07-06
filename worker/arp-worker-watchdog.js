@@ -320,6 +320,14 @@ function isAwaitingAcceptance(task) {
     || (task.state === 'offered' && task.nextActionOwner === 'me');
 }
 
+function isWaitingForCounterpartyOrChain(task) {
+  const phase = String(task.phase || '').toLowerCase();
+  const state = String(task.state || '').toLowerCase();
+  if (task.nextActionOwner && task.nextActionOwner !== 'me') return true;
+  return ['awaiting_fund', 'awaiting_lock', 'awaiting_work_request'].includes(phase)
+    || ['accepted', 'pending_lock_finalization'].includes(state);
+}
+
 function isWorkerLine(line) {
   const parts = line.split('\t');
   return parts[0] === 'STALL' || (parts[0] === 'NEW' && parts[2] !== 'handshake');
@@ -541,6 +549,11 @@ function main() {
 
       if (isAwaitingAcceptance(task)) {
         pushLine(['ACCEPT', relationshipId, delegationId, task.state || task.phase || 'offered']);
+        continue;
+      }
+
+      if (isWaitingForCounterpartyOrChain(task)) {
+        log(`wait delegation=${delegationId} phase=${task.phase || ''} state=${task.state || ''} nextActionOwner=${task.nextActionOwner || ''}; no Hermes runner`);
         continue;
       }
 
