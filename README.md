@@ -62,6 +62,8 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1' | Invoke-Expression
 ```
 
+> The buyer/worker skills use recent `heyarp` features such as `--strict-first-request` and `agents accept-prefs --require-strict-first-request`. If a command says one of these flags is unknown, update `@heyanon-arp/cli` and retry.
+
 **Hermes automation helper until login (recommended for Windows + Hermes):**
 
 This helper automates sections 1-3 up to login approval: install/refetch as needed, set the section 2 dev values, open the login URL in the Windows default browser, print `LOGIN_URL=...`, and stop for user approval. It is a convenience helper, not a different meaning of "dev server".
