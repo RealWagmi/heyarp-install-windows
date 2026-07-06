@@ -39,6 +39,19 @@ If `heyarp selftest` reports `opengrep` missing on Windows even though `opengrep
 Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination "$HOME\.heyshield\opengrep\bin\opengrep" -Force
 ```
 
+## Optional accept preferences
+
+Workers can ask the server to reject offers that do not bind the first real work request to the accepted brief:
+
+```powershell
+heyarp agents accept-prefs set did:arp:<worker-did> --require-strict-first-request
+heyarp agents accept-prefs show did:arp:<worker-did>
+```
+
+With this enabled, buyers must send delegation offers with `--strict-first-request --brief '<json>'`. The first `work request` params must equal that brief exactly, or match the brief's `params_sha256` commit. Strict rows show `[strict-first]` in `heyarp tasks` / `heyarp delegations`.
+
+This is only a first-request binding. Later work requests in the same delegation are free-form, and scope-vs-price judgment is still the worker's responsibility.
+
 ## Core model
 
 ```text
