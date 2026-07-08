@@ -13,7 +13,7 @@
 
 1. **Install** - run the PowerShell installer command with a command **timeout >= 600s** (opengrep is a ~40 MB download). -> section 1
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
-3. **Configure server + RPC** using section 2's values - **do NOT ask the user for a URL** (use the devnet block for testing). -> section 2
+3. **Server + RPC** - use production defaults; run section 2's devnet block **only if the user explicitly asks for devnet/testing/dev server**. -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
 5. **Register the agent** - ask the user **only** for the name (+ role tag); reuses the logged-in session. -> section 3
 6. **Fund the settlement wallet** - give the user the faucet link + their settlement address. -> section 4
@@ -27,7 +27,7 @@
 - **Starting before reading the whole guide.** Build the checklist above first.
 - **Killing `heyarp login`.** Credentials are saved **only** when the user approves; a killed or retried login loses them and the old URL dies. Background it and wait.
 - **Running `heyarp login` in the foreground.** Use background + redirect to a file, then read the URL from the file.
-- **Asking the user for a server URL.** The values are in section 2 - use them (devnet for testing). Only a user-named custom/mainnet server overrides.
+- **Changing server/RPC by default.** Production/mainnet is the default path. Leave the CLI defaults unchanged unless the user explicitly asks for devnet/testing/dev server or names a custom server.
 - **Logging in or signing on the user's behalf.** Hand the URL over; the user approves with **their own** wallet. This decides whose money moves on-chain.
 - **Stopping after `heyarp whoami`.** Registered != operational. You must still download and install the skills (step 9).
 - **Offering skills as optional ("if you want").** Operating the protocol **requires** a skill - only the _role choice_ (buyer / worker / both) is the user's.
@@ -105,9 +105,9 @@ heyarp -h
 
 ## 2. Server & Network Configuration
 
-> **AI agent: do NOT ask the user for a server URL.** For testing, run the devnet block below. For production, leave the CLI's built-in default (public ARP server) - set a custom server only if the user **explicitly names one**.
+> **AI agent: production/mainnet is the default.** Do not ask the user for a server URL and do not configure devnet unless the user explicitly asks for devnet/testing/dev server. For production, leave the CLI's built-in default (public ARP server). Set a custom server only if the user explicitly names one.
 
-**Devnet (test network):**
+**Devnet / testing only:**
 
 ```powershell
 heyarp config set server https://dev.api.heyanon.ai/arp
@@ -131,7 +131,7 @@ heyarp config set rpcUrl https://api.devnet.solana.com
 > **HOW TO RUN IT - this is exactly the step the test agent got wrong. Follow it literally:**
 >
 > 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
-> 2. **Do NOT pass a server URL** - it was set in section 2 (`config set server`), so `heyarp login` uses it. Never ask the user for it. (If your build _requires_ `--server`, use the exact section 2 value.)
+> 2. **Do NOT pass a server URL** - production/mainnet uses the CLI default. If the user explicitly requested devnet/testing/dev server, section 2 configured it already and `heyarp login` uses that config. Never ask the user for a raw URL.
 > 3. **Read the URL from the file, paste it to the user**, then **WAIT** for them to approve. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
 > 4. Wallet approval only works while `heyarp login` is still running. If it exits before approval, run `heyarp login` again and approve the new URL.
 
