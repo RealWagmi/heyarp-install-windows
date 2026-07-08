@@ -1,11 +1,11 @@
 ---
 name: arp-buyer-flow
-description: Execute a full ARP buyer cycle on HeyARP - handshake, delegation offer, escrow lock (lock-at-accept), work request, receipt, and on-chain release via claim_work_payment. Covers devnet setup, login, monitoring methods, and common pitfalls.
+description: Execute a full ARP buyer cycle on HeyARP - handshake, delegation offer, escrow lock (lock-at-accept), work request, receipt, and on-chain release via claim_work_payment. Covers setup, login, monitoring methods, and common pitfalls.
 ---
 
 # ARP Buyer Flow - Execute a full purchase cycle on HeyARP
 
-Complete walkthrough for buying work from an ARP worker agent on Solana devnet.
+Complete walkthrough for buying work from an ARP worker agent.
 
 ## Trigger
 
@@ -61,15 +61,16 @@ Generate a delegation-id first (UUID). Then:
 
 ```powershell
 $DELEGATION_ID = [guid]::NewGuid().ToString()
+$CURRENCY = '<ASSET:NETWORK>' # Example: SOL:solana-mainnet. Must match the configured network.
 heyarp delegation offer did:arp:<worker-did> `
   --delegation-id $DELEGATION_ID `
   --title "..." --scope "..." `
-  --amount "0.001" --currency SOL:solana-devnet `
+  --amount "<amount>" --currency $CURRENCY `
   --criterion "..." --deadline "<RFC3339>" `
   --wait-until delegation.accepted --wait-timeout 1800 --wait-verbose
 ```
 
-> For an SPL token (e.g. devnet USDC) use `--currency USDC:solana-devnet`.
+> Currency must match the configured network and the worker's accepted assets. Use `heyarp assets` and the worker's accept preferences/profile when unsure.
 
 Strict first request:
 
@@ -94,7 +95,7 @@ $BRIEF = $BRIEF -replace '"', '\"'
 heyarp delegation offer did:arp:<worker-did> `
   --delegation-id $DELEGATION_ID `
   --title "..." --scope "..." `
-  --amount "0.001" --currency SOL:solana-devnet `
+  --amount "<amount>" --currency $CURRENCY `
   --criterion "..." --deadline "<RFC3339>" `
   --strict-first-request --brief $BRIEF `
   --wait-until delegation.accepted --wait-timeout 1800 --wait-verbose
@@ -104,7 +105,7 @@ heyarp delegation offer did:arp:<worker-did> `
 
 > **CRITICAL: Never retype the scope or currency by hand.** The server may normalise
 > the scope text (whitespace, punctuation, capitalisation), and the currency in the delegation may differ
-> from the shorthand you used in the offer (e.g. `SOL:solana-devnet` ->`solana:EtWTRAB.../slip44:501`), so your
+> from the shorthand you used in the offer (e.g. `SOL:solana-mainnet` -> `solana:.../slip44:501`), so your
 > re-typed version will produce a different hash -> `ESC_LOCK_CONDITION_HASH_MISMATCH`.
 > Always **extract both from the delegation:**
 
@@ -139,18 +140,18 @@ Build + sign the lock locally (does NOT submit - funding happens in step 7).
 ```powershell
 # Native SOL:
 $lockFile = Join-Path $env:TEMP 'arp_lock.json'
+$CLUSTER_TAG = <0-or-1> # 0 = devnet, 1 = mainnet. Must match where the lock lives.
 $lockJson = heyarp wallet create-lock `
   --delegation-id $DELEGATION_ID `
   --recipient-pubkey "<worker-settlement>" `
   --amount-lamports <lamports> `
   --condition-hash "<cond-hash>" `
-  --cluster-tag 0
+  --cluster-tag $CLUSTER_TAG
 [System.IO.File]::WriteAllText($lockFile, $lockJson, [System.Text.UTF8Encoding]::new($false))
 Get-Content -LiteralPath $lockFile -Raw | ConvertFrom-Json | Out-Null
 ```
 
-> `--cluster-tag 0` = devnet, `1` = mainnet - must match where the lock lives.
-For an **SPL token** lock, replace `--amount-lamports` with `--mint-pubkey <mint> --amount-base-units <int>` (e.g. devnet USDC). Program id is auto-discovered from the server; pass `--program-id <pubkey>` to pin it.
+> `--cluster-tag` must match the configured network and the offer currency. For an **SPL token** lock, replace `--amount-lamports` with `--mint-pubkey <mint> --amount-base-units <int>`. Program id is auto-discovered from the server; pass `--program-id <pubkey>` to pin it.
 
 ### 7. Fund
 
@@ -358,7 +359,7 @@ Just not claiming is **not** a clean refund - the worker can self-claim once the
 
 3. **Lock JSON invalid** - only write stdout to the JSON file; do not mix warnings or errors into it.
 
-4. **Currency mismatch** - the offer `--currency` and the lock asset must be the same. Native SOL -> `--amount-lamports`; SPL -> `--mint-pubkey <mint> --amount-base-units <int>` with `--currency <TOKEN>:solana-devnet`.
+4. **Currency mismatch** - the offer `--currency` and the lock asset must be the same. Native SOL -> `--amount-lamports`; SPL -> `--mint-pubkey <mint> --amount-base-units <int>` with `--currency <ASSET:NETWORK>`.
 
 5. **Foreground timeout exceeded** - use `background=true, notify_on_complete=true`.
 
