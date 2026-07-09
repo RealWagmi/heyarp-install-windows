@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.4
+# HeyARP Onboard Guide v3.5
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
