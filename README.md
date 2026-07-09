@@ -10,17 +10,13 @@
 ## AI AGENT CHECKLIST - follow IN ORDER, do NOT skip a step
 
 > Work this list top to bottom - each step links to its section (section).
->
->
-> **Dev server means only this:** use the ARP dev API and Solana devnet RPC from
-> section 2. It does **not** mean starting `npm`, `yarn`, `pnpm`, or any web dev server.
 
 1. **Install** - run the PowerShell installer command with a command **timeout >= 600s** (opengrep is a ~40 MB download). -> section 1
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
-3. **Configure server + RPC** using section 2's values - **do NOT ask the user for a URL** (use the devnet block for testing). -> section 2
+3. **Server + RPC** - leave production/mainnet defaults unchanged unless the user explicitly provides custom configuration. -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
 5. **Register the agent** - ask the user **only** for the name (+ role tag); reuses the logged-in session. -> section 3
-6. **Fund the settlement wallet** - give the user the faucet link + their settlement address. -> section 4
+6. **Fund the settlement wallet** - give the user their settlement address and tell them to fund it through their normal production Solana funding path. -> section 4
 7. **Verify** - `heyarp whoami` shows DID + server profile. -> section 5
 8. **Raise the framework time/turn budget** - session + Hermes worker-run timeout **>= 30 min**, else big jobs are cut off mid-work. -> section 6a
 9. **Download and Install the ARP agent skills** - **required to operate, not optional.** Ask the user _which role(s)_ (buyer / worker / both) and install those. -> section 6b
@@ -31,7 +27,7 @@
 - **Starting before reading the whole guide.** Build the checklist above first.
 - **Killing `heyarp login`.** Credentials are saved **only** when the user approves; a killed or retried login loses them and the old URL dies. Background it and wait.
 - **Running `heyarp login` in the foreground.** Use background + redirect to a file, then read the URL from the file.
-- **Asking the user for a server URL.** The values are in section 2 - use them (devnet for testing). Only a user-named custom/mainnet server overrides.
+- **Changing server/RPC by default.** Production/mainnet is the default path. Leave the CLI defaults unchanged unless the user explicitly provides custom configuration.
 - **Logging in or signing on the user's behalf.** Hand the URL over; the user approves with **their own** wallet. This decides whose money moves on-chain.
 - **Stopping after `heyarp whoami`.** Registered != operational. You must still download and install the skills (step 9).
 - **Offering skills as optional ("if you want").** Operating the protocol **requires** a skill - only the _role choice_ (buyer / worker / both) is the user's.
@@ -127,14 +123,7 @@ heyarp -h
 
 ## 2. Server & Network Configuration
 
-> **AI agent: do NOT ask the user for a server URL.** For testing, run the devnet block below. For production, leave the CLI's built-in default (public ARP server) - set a custom server only if the user **explicitly names one**.
-
-**Devnet (test network):**
-
-```powershell
-heyarp config set server https://dev.api.heyanon.ai/arp
-heyarp config set rpcUrl https://api.devnet.solana.com
-```
+> **AI agent: production/mainnet is the default.** Do not ask the user for a server URL and do not configure server/RPC by default. Leave the CLI's built-in defaults unchanged. Set a custom server/RPC only if the user explicitly provides custom configuration.
 
 ---
 
@@ -208,7 +197,7 @@ After registration, save:
 
 ## 4. Fund the Settlement Wallet
 
-ARP uses **Solana devnet/mainnet** for escrow deposits. Your agent needs tokens on its settlement key.
+ARP uses Solana for escrow deposits. Your agent needs production/mainnet funds on its settlement key.
 
 ### Find your settlement address:
 
@@ -227,35 +216,11 @@ heyarp selftest --role worker
 
 If `selftest` says the settlement wallet is under the required balance, fund the shown settlement address and run the same command again.
 
-### Devnet funding:
-
-Devnet faucets require a browser. They use Cloudflare + wallet connection and cannot be accessed reliably via CLI.
-**Tell the user to open this link and paste their settlement address:**
-
- **[faucet.solana.com](https://faucet.solana.com/)**
-
-### Production funding:
-
-Use the user's normal Solana funding path for the configured production network. Do not use the devnet faucet or devnet RPC for production.
+Use the user's normal Solana funding path for the configured production network.
 
 ### Check balance manually:
 
 Manual checks are for inspecting the raw wallet balance. `heyarp selftest` remains the readiness source of truth.
-
-#### Devnet
-
-```powershell
-# Option 1: Solana CLI (if installed)
-solana balance <SETTLEMENT_PUBKEY> --url https://api.devnet.solana.com
-
-# Option 2: Invoke-RestMethod (no Solana CLI needed)
-$rpcUrl = 'https://api.devnet.solana.com'
-$body = @{ jsonrpc = '2.0'; id = 1; method = 'getBalance'; params = @('<SETTLEMENT_PUBKEY>') } | ConvertTo-Json -Compress
-$result = Invoke-RestMethod -Uri $rpcUrl -Method Post -ContentType 'application/json' -Body $body
-"$($result.result.value / 1e9) SOL"
-```
-
-#### Production / Mainnet
 
 Use the same production RPC URL configured for this agent.
 
