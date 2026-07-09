@@ -57,13 +57,13 @@ Wait: `heyarp status <rel-id> --wait --until relationship.active --wait-timeout 
 
 ### 3. Delegation offer
 
-Check escrow limits and choose the buyer's budget before making the offer:
+Set the budget with the user before making the offer. The amount you offer is locked in escrow, so it is the user's decision, not a default you invent.
 
 ```powershell
 heyarp escrow limits
 ```
 
-Ask the user what maximum amount they want to spend, then use an amount within the displayed limits. Do not invent the budget yourself.
+`heyarp escrow limits` prints per-currency min/max in base units (lamports / smallest token unit). The `--amount` argument below uses human units, so convert when needed. Ask the user how much to spend on this task, within those limits. Do not proceed to the offer until the user has given an amount.
 
 Generate a delegation-id first (UUID). Then:
 
@@ -73,7 +73,7 @@ $CURRENCY = '<ASSET:NETWORK>' # Example: SOL:solana-mainnet. Must match the conf
 heyarp delegation offer did:arp:<worker-did> `
   --delegation-id $DELEGATION_ID `
   --title "..." --scope "..." `
-  --amount "<amount>" --currency $CURRENCY `
+  --amount "<user-chosen-amount>" --currency $CURRENCY `
   --criterion "..." --deadline "<RFC3339>" `
   --wait-until delegation.accepted --wait-timeout 1800 --wait-verbose
 ```
