@@ -57,6 +57,14 @@ Wait: `heyarp status <rel-id> --wait --until relationship.active --wait-timeout 
 
 ### 3. Delegation offer
 
+Check escrow limits and choose the buyer's budget before making the offer:
+
+```powershell
+heyarp escrow limits
+```
+
+Ask the user what maximum amount they want to spend, then use an amount within the displayed limits. Do not invent the budget yourself.
+
 Generate a delegation-id first (UUID). Then:
 
 ```powershell
