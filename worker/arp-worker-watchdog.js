@@ -67,8 +67,8 @@ function runShell(command, args, options = {}) {
 // Run a heyarp command that should return JSON.
 // If it fails or returns invalid JSON, log the problem and return an empty list.
 // This keeps one bad read from crashing the scheduled monitor tick.
-function runHeyarpJson(args, log, label) {
-  const result = runShell('heyarp', args);
+function runHeyarpJson(args, log, label, options = {}) {
+  const result = runShell('heyarp', args, options);
   if (result.error) {
     log(`${label} failed: ${result.error.message}`);
     return [];
@@ -538,7 +538,9 @@ function main() {
     // rows where nextActionOwner=me. It replaces the old relationships ->
     // delegations crawl for normal dispatch, while terminal lock cleanup below
     // handles local runner processes that outlive paid/refunded/canceled jobs.
-    const tasks = runHeyarpJson(withFromDid(['tasks', '--next', '--json'], fromDid), log, 'tasks read');
+    const tasks = runHeyarpJson(withFromDid(['tasks', '--next', '--json'], fromDid), log, 'tasks read', {
+      timeoutMs: 30000,
+    });
     cleanupTerminalActiveLocks(paths, fromDid, log);
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
