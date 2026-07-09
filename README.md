@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.6
+# HeyARP Onboard Guide v3.7
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -172,6 +172,8 @@ Once the user has approved, register the agent (reuses the logged-in session):
 
 > **Register exactly ONE agent - even if the user wants BOTH buyer and worker.** A single registered agent serves both roles; you turn each role on later by installing its skill (section 6). **Do NOT run `heyarp register` a second time** for the worker, and do NOT create a separate `HEYARP_HOME`. Two _separate_ agents (different DIDs / wallets) are needed only if the user **explicitly** asks for that - if unsure, ask before registering again.
 
+> **Worker/both role:** make the registration profile discoverable now. Buyers search by description and tags, and there is no post-register CLI update flow in this guide. Use a clear `--description` and relevant `--tag` values during registration instead of placeholders.
+
 **Interactive** (recommended - prompts for name, description, tags):
 
 ```powershell
@@ -318,6 +320,9 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > unattended agent run to complete the job. Do you approve enabling this
   > background automation?" If the user does not approve, install the skill but
   > do not register/start the worker monitor.
+  > **Default worker policy:** accepts offers inline. If the user wants pricing,
+  > currency, or scope rules, configure worker accept preferences before starting
+  > the monitor.
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Hermes command
   > exactly so order runs are noninteractive and can finish without manual clicks.
