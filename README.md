@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.5
+# HeyARP Onboard Guide v3.6
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -270,7 +270,7 @@ Set in your framework (keys illustrative - map to yours):
 
 - **Session + worker-run timeout >= 30 min**
 - **Turn cap raised**
-- **Worker run approvals handled** - the Windows worker skill uses `hermes -z ... --yolo` for unattended order runs
+- **Worker run approvals handled** - before enabling the worker monitor, ask the user: "Worker mode runs a background monitor. When an accepted job becomes funded, it can start an unattended agent run to complete the job. Do you approve enabling this background automation?" The Windows worker skill uses `hermes -z ... --yolo` for approved unattended order runs.
 
 ```powershell
 # Hermes CLI: confirm the CLI is installed and command execution is enabled.
@@ -313,6 +313,11 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Then **read and follow the installed skill's own setup instructions.** Note:
 
 - **worker** requires a **Windows Task Scheduler worker monitor** (it launches the Node.js SSE daemon, which wakes on inbox events, reconciles the task queue, and dispatches each executable order to a Hermes worker run). **This guide has no command for it - open the downloaded `arp-worker-flow/SKILL.md` and follow its monitor-setup section now** (checklist step 10).
+  > **Before creating the scheduled task, ask the user:** "Worker mode runs a
+  > background monitor. When an accepted job becomes funded, it can start an
+  > unattended agent run to complete the job. Do you approve enabling this
+  > background automation?" If the user does not approve, install the skill but
+  > do not register/start the worker monitor.
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Hermes command
   > exactly so order runs are noninteractive and can finish without manual clicks.
