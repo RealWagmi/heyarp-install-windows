@@ -320,6 +320,116 @@ function isAwaitingAcceptance(task) {
     || (task.state === 'offered' && task.nextActionOwner === 'me');
 }
 
+function normalizeDecimal(value) {
+  const text = String(value || '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return '';
+  const [whole, fraction = ''] = text.split('.');
+  const cleanWhole = whole.replace(/^0+(?=\d)/, '') || '0';
+  const cleanFraction = fraction.replace(/0+$/, '');
+  return cleanFraction ? `${cleanWhole}.${cleanFraction}` : cleanWhole;
+}
+
+function compareDecimal(left, right) {
+  const a = normalizeDecimal(left);
+  const b = normalizeDecimal(right);
+  if (!a || !b) return null;
+  const [aWhole, aFraction = ''] = a.split('.');
+  const [bWhole, bFraction = ''] = b.split('.');
+  const scale = Math.max(aFraction.length, bFraction.length);
+  const aScaled = BigInt(`${aWhole}${aFraction.padEnd(scale, '0')}`);
+  const bScaled = BigInt(`${bWhole}${bFraction.padEnd(scale, '0')}`);
+  if (aScaled === bScaled) return 0;
+  return aScaled > bScaled ? 1 : -1;
+}
+
+function firstPresent(values) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
+function taskOfferAmount(task) {
+  return firstPresent([
+    task.amount,
+    task.offerAmount,
+    task.price?.amount,
+    task.offer?.amount,
+    task.delegation?.amount,
+    task.terms?.amount,
+  ]);
+}
+
+function taskCurrencyValues(task) {
+  const currency = task.currency || task.offerCurrency || task.delegation?.currency || task.terms?.currency || {};
+  return [
+    task.asset,
+    task.assetId,
+    task.asset_id,
+    typeof task.currency === 'string' ? task.currency : '',
+    task.currencySymbol,
+    task.currencyAsset,
+    task.currencyAssetId,
+    task.currency_asset_id,
+    currency.symbol,
+    currency.asset,
+    currency.assetId,
+    currency.asset_id,
+    currency.id,
+  ].filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function readAcceptPolicy(args) {
+  return {
+    amount: normalizeDecimal(args['accept-amount'] || process.env.ARP_WORKER_ACCEPT_AMOUNT || '0.1') || '0.1',
+    asset: String(args['accept-asset'] || process.env.ARP_WORKER_ACCEPT_ASSET || 'SOL').trim().toUpperCase() || 'SOL',
+  };
+}
+
+function assetMatches(requiredAsset, offeredAssets) {
+  const required = String(requiredAsset || '').trim().toUpperCase();
+  if (!required) return false;
+  for (const offeredAsset of offeredAssets) {
+    const offered = String(offeredAsset || '').trim().toUpperCase();
+    if (!offered) continue;
+    if (offered === required) return true;
+    if (offered.startsWith(`${required}:`)) return true;
+    if (required.startsWith(`${offered}:`)) return true;
+  }
+  return false;
+}
+
+function evaluateAcceptPolicy(task, policy) {
+  const amount = normalizeDecimal(taskOfferAmount(task));
+  if (!amount) {
+    return {
+      ok: false,
+      reason: 'policy',
+      detail: `offer missing amount; required exact ${policy.amount} ${policy.asset}`,
+    };
+  }
+
+  const currencies = taskCurrencyValues(task).map((value) => String(value).trim().toUpperCase());
+  if (!assetMatches(policy.asset, currencies)) {
+    return {
+      ok: false,
+      reason: 'policy',
+      detail: `offer asset ${currencies.join('/') || '<missing>'} does not match required ${policy.asset}`,
+    };
+  }
+
+  const amountCompare = compareDecimal(amount, policy.amount);
+  if (amountCompare !== 0) {
+    return {
+      ok: false,
+      reason: amountCompare !== null && amountCompare < 0 ? 'rate_too_low' : 'policy',
+      detail: `offer amount ${amount} ${policy.asset} does not match required exact ${policy.amount} ${policy.asset}`,
+    };
+  }
+
+  return { ok: true, detail: `matches exact ${policy.amount} ${policy.asset}` };
+}
+
 function isWaitingForCounterpartyOrChain(task) {
   const phase = String(task.phase || '').toLowerCase();
   const state = String(task.state || '').toLowerCase();
@@ -431,7 +541,8 @@ function startWorkerRun(context, paths, workspace, log) {
 }
 
 // Handle one normalized watchdog line.
-// STALL starts a replacement worker, ACCEPT accepts an offer inline, and NEW
+// STALL starts a replacement worker, ACCEPT accepts a policy-matching offer, DECLINE
+// rejects a non-matching offer, and NEW
 // either accepts a handshake inline or starts a funded/executable worker run.
 function handleLine(line, paths, workspace, log, fromDid) {
   const parts = line.split('\t');
@@ -456,6 +567,26 @@ function handleLine(line, paths, workspace, log, fromDid) {
     ], fromDid));
     if (result.status !== 0) throw new Error(`delegation accept failed: ${(result.stderr || '').trim()}`);
     log(`ACCEPT delegation accepted relationship=${relationshipId} delegation=${delegationId}`);
+    return false;
+  }
+
+  if (kind === 'DECLINE') {
+    const relationshipId = parts[1];
+    const delegationId = parts[2];
+    const reason = parts[3] || 'policy';
+    const detail = parts[4] || 'does not match worker accept policy';
+    const result = runShell('heyarp', withFromDid([
+      'delegation',
+      'decline',
+      relationshipId,
+      delegationId,
+      '--reason',
+      reason,
+      '--reason-detail',
+      detail,
+    ], fromDid));
+    if (result.status !== 0) throw new Error(`delegation decline failed: ${(result.stderr || '').trim()}`);
+    log(`DECLINE delegation declined relationship=${relationshipId} delegation=${delegationId} reason=${reason} detail=${detail}`);
     return false;
   }
 
@@ -502,11 +633,13 @@ function main() {
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
   const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 3);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
+  const acceptPolicy = readAcceptPolicy(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
 
   withMonitorLock(paths, () => {
+    log(`accept policy exact_amount=${acceptPolicy.amount} asset=${acceptPolicy.asset}`);
     // seen.txt prevents processing the same inbox event twice.
     // dispatched.txt tells us which active tasks already have a worker run.
     const seen = new Set(readLines(paths.seenFile));
@@ -518,7 +651,7 @@ function main() {
       const line = parts.join('\t');
       lines.push(line);
       const kind = parts[0];
-      const delegationId = kind === 'STALL' || kind === 'ACCEPT' ? parts[2] : parts[5];
+      const delegationId = kind === 'STALL' || kind === 'ACCEPT' || kind === 'DECLINE' ? parts[2] : parts[5];
       if (delegationId) queuedDelegations.add(delegationId);
     };
 
@@ -550,7 +683,12 @@ function main() {
       if (!delegationId || !relationshipId || queuedDelegations.has(delegationId)) continue;
 
       if (isAwaitingAcceptance(task)) {
-        pushLine(['ACCEPT', relationshipId, delegationId, task.state || task.phase || 'offered']);
+        const decision = evaluateAcceptPolicy(task, acceptPolicy);
+        if (decision.ok) {
+          pushLine(['ACCEPT', relationshipId, delegationId, task.state || task.phase || 'offered']);
+        } else {
+          pushLine(['DECLINE', relationshipId, delegationId, decision.reason, decision.detail]);
+        }
         continue;
       }
 
@@ -592,7 +730,7 @@ function main() {
     // Job-starting lines respect capacity. If capacity is full, do not mark
     // the event seen; the next watchdog tick can retry it.
     let activeJobs = countActiveJobs(paths);
-    for (const kind of ['STALL', 'ACCEPT', 'NEW']) {
+    for (const kind of ['STALL', 'DECLINE', 'ACCEPT', 'NEW']) {
       for (const line of lines.filter((candidate) => candidate.startsWith(`${kind}\t`))) {
         if (isWorkerLine(line) && activeJobs >= maxJobs) {
           log(`job capacity full active=${activeJobs} max=${maxJobs}; retry next tick line=${line}`);
