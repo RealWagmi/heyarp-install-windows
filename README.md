@@ -306,9 +306,11 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > unattended agent run to complete the job. Do you approve enabling this
   > background automation?" If the user does not approve, install the skill but
   > do not register/start the worker monitor.
-  > **Default worker policy:** accepts offers inline. If the user wants pricing,
-  > currency, or scope rules, configure worker accept preferences before starting
-  > the monitor.
+  > **Worker accept policy is required before starting the monitor:** ask the user
+  > what exact static amount and exact asset this worker accepts. If they do not
+  > choose, use `0.1 SOL`. Configure the worker skill/watchdog with that amount
+  > and asset before starting the scheduled task. Do not leave the worker as
+  > "accept any offer".
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Codex Desktop command
   > exactly so order runs are noninteractive and can finish without manual clicks.

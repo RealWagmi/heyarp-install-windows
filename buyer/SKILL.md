@@ -159,7 +159,7 @@ $lockJson = heyarp wallet create-lock `
 Get-Content -LiteralPath $lockFile -Raw | ConvertFrom-Json | Out-Null
 ```
 
-> `--cluster-tag` must match the configured network and the offer currency. For an **SPL token** lock, replace `--amount-lamports` with `--mint-pubkey <mint> --amount-base-units <int>`. Program id is auto-discovered from the server; pass `--program-id <pubkey>` to pin it.
+> `--cluster-tag` must match the configured network and the offer currency. The lock amount must equal the delegation offer amount from step 3, converted to base units: native SOL uses `--amount-lamports` (`SOL * 1_000_000_000`; example `0.5 SOL` -> `500000000`), and SPL tokens use `--amount-base-units` with that asset's decimals. Check decimals with `heyarp assets`. A mismatch is rejected at `delegation fund`. For an **SPL token** lock, replace `--amount-lamports` with `--mint-pubkey <mint> --amount-base-units <int>`. Program id is auto-discovered from the server; pass `--program-id <pubkey>` to pin it.
 
 ### 7. Fund
 
