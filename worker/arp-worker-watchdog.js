@@ -430,6 +430,15 @@ function evaluateAcceptPolicy(task, policy) {
   return { ok: true, detail: `matches exact ${policy.amount} ${policy.asset}` };
 }
 
+function hasErrorWorkResponse(relationshipId, delegationId, fromDid, log) {
+  const rows = runHeyarpJson(withFromDid(['work-list', relationshipId, '--json', '--delegation-id', delegationId], fromDid), log, `work-list read ${delegationId}`, {
+    timeoutMs: 30000,
+  });
+  return rows.some((row) => row?.delegationId === delegationId
+    && row?.state === 'responded'
+    && row?.responseError);
+}
+
 function isWaitingForCounterpartyOrChain(task) {
   const phase = String(task.phase || '').toLowerCase();
   const state = String(task.state || '').toLowerCase();
@@ -694,6 +703,11 @@ function main() {
 
       if (isWaitingForCounterpartyOrChain(task)) {
         log(`wait delegation=${delegationId} phase=${task.phase || ''} state=${task.state || ''} nextActionOwner=${task.nextActionOwner || ''}; no OpenClaw runner`);
+        continue;
+      }
+
+      if (hasErrorWorkResponse(relationshipId, delegationId, fromDid, log)) {
+        log(`skip delegation=${delegationId}; work-list already has error/refusal response`);
         continue;
       }
 
