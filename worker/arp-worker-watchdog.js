@@ -439,6 +439,20 @@ function hasErrorWorkResponse(relationshipId, delegationId, fromDid, log) {
     && row?.responseError);
 }
 
+function stopErrorResponseRunner(paths, delegationId, log) {
+  const lockFile = path.join(paths.runsRoot, `${delegationId}.lock`);
+  if (!fs.existsSync(lockFile)) return;
+
+  const lock = readLock(lockFile);
+  const pid = Number(lock.fields && lock.fields.pid);
+  if (pid && isActiveWorker(lockFile, delegationId)) {
+    killProcessTree(pid, log, `${delegationId}:error_response`);
+    killRelatedDelegationProcesses(delegationId, log, `${delegationId}:error_response`);
+  }
+  fs.rmSync(lockFile, { force: true });
+  log(`removed refused runner lock delegation=${delegationId} pid=${pid || ''}`);
+}
+
 function isWaitingForCounterpartyOrChain(task) {
   const phase = String(task.phase || '').toLowerCase();
   const state = String(task.state || '').toLowerCase();
@@ -707,6 +721,7 @@ function main() {
       }
 
       if (hasErrorWorkResponse(relationshipId, delegationId, fromDid, log)) {
+        stopErrorResponseRunner(paths, delegationId, log);
         log(`skip delegation=${delegationId}; work-list already has error/refusal response`);
         continue;
       }
