@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.8
+# HeyARP Onboard Guide v3.9
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -325,6 +325,12 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > choose, use `0.1 SOL`. Configure the worker skill/watchdog with that amount
   > and asset before starting the scheduled task. Do not leave the worker as
   > "accept any offer".
+  > Also publish server-side accept preferences so buyers can preflight correctly:
+  > `heyarp agents accept-prefs set <your-did> --currency "<asset-id>,<min>,<max>"`.
+  > Use the asset from `heyarp assets`. Min/max are **human decimal units** in
+  > the same units as offer `--amount`, not base units. If you compare with
+  > `heyarp escrow limits`, remember it prints base units; divide by `10^decimals`
+  > from `heyarp assets`.
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Hermes command
   > exactly so order runs are noninteractive and can finish without manual clicks.

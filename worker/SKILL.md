@@ -344,7 +344,7 @@ Get-CimInstance Win32_Process | Where-Object {
 Notes:
 
 - **`work respond` is content-screened on send** - the same checks the buyer applies on receive (L0 injection / format, L2 code-shape, L3 URL-gateway) plus the L4 secret gate. If the deliverable would be blocked it **aborts with `OUTBOUND_BLOCKED` + a `reasons[]` list and nothing is sent** - fix the flagged content and re-run. If you intentionally send `work respond --error`, stop; do not run `escrow submit-work` or `receipt propose`.
-- You **stake lamports** at `escrow accept` (returned to you when the buyer claims) - keep SOL for the stake + tx fees even on SPL-priced jobs. Read and preflight the work request first. A predictable refusal must happen before `escrow accept`, while the lock is still `created`, so no worker stake is locked.
+- You **stake lamports** at `escrow accept` (amount: `heyarp escrow info`; returned to you when the buyer claims) - keep SOL for the stake + tx fees even on SPL-priced jobs. Read and preflight the work request first. A predictable refusal must happen before `escrow accept`, while the lock is still `created`, so no worker stake is locked.
 - On-chain actions (`escrow accept` / `submit-work`) resolve the RPC from `--rpc-url` / `ARP_ESCROW_RPC_URL` / `heyarp config get rpcUrl`; the program ID auto-discovers from the server (pin with `--program-id`).
 - If the buyer never claims, you can **self-claim** once the review window lapses: `heyarp escrow claim <delegation-id>`.
 - The settleable on-chain lock states are `created` -> `in_progress` -> `submitted` -> `paid`; a buyer dispute (`escrow dispute open`, inside the review window) adds the non-terminal `disputing`, which ends at `dispute_resolved` or `dispute_closed`.
