@@ -58,6 +58,7 @@ function runWatchdog(args, log, reason) {
   if (args['max-jobs']) watchdogArgs.push('--max-jobs', args['max-jobs']);
   if (args['accept-amount']) watchdogArgs.push('--accept-amount', args['accept-amount']);
   if (args['accept-asset']) watchdogArgs.push('--accept-asset', args['accept-asset']);
+  if (args['max-runtime-minutes']) watchdogArgs.push('--max-runtime-minutes', args['max-runtime-minutes']);
 
   const started = Date.now();
   const result = spawnSync(process.execPath, watchdogArgs, {
@@ -124,7 +125,12 @@ function main() {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (activeTimer) clearInterval(activeTimer);
     if (keepAlive) clearInterval(keepAlive);
-    if (tail) tail.kill();
+    if (tail?.pid) {
+      spawnSync('taskkill.exe', ['/PID', String(tail.pid), '/T', '/F'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    }
     setTimeout(() => process.exit(0), 250).unref();
   };
 

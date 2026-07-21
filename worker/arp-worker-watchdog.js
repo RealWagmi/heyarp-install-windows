@@ -255,7 +255,7 @@ function terminalReasonFromDelegation(record) {
   if (['paid', 'refunded'].includes(releaseStatus)) return `releaseStatus=${releaseStatus}`;
 
   const state = String(record.state || '').toLowerCase();
-  if (['cancelled', 'canceled', 'declined', 'refunded'].includes(state)) return `delegationState=${state}`;
+  if (['cancelled', 'canceled', 'declined', 'failed', 'refunded'].includes(state)) return `delegationState=${state}`;
 
   return '';
 }
@@ -263,7 +263,9 @@ function terminalReasonFromDelegation(record) {
 function terminalReasonFromEscrow(record) {
   if (!record) return '';
   const state = String(record.state || record.lockState || '').toLowerCase();
-  if (['paid', 'refunded', 'cancelled', 'canceled', 'revoked'].includes(state)) return `escrowState=${state}`;
+  if (['paid', 'refunded', 'cancelled', 'canceled', 'revoked', 'dispute_resolved', 'dispute_closed'].includes(state)) {
+    return `escrowState=${state}`;
+  }
   return '';
 }
 
@@ -362,6 +364,17 @@ function taskOfferAmount(task) {
 
 function taskCurrencyValues(task) {
   const currency = task.currency || task.offerCurrency || task.delegation?.currency || task.terms?.currency || {};
+  const network = firstPresent([
+    task.network,
+    task.settlementNetwork,
+    task.currencyNetwork,
+    currency.network,
+  ]);
+  const symbol = firstPresent([
+    task.asset,
+    task.currencySymbol,
+    currency.symbol,
+  ]);
   return [
     task.asset,
     task.assetId,
@@ -376,13 +389,19 @@ function taskCurrencyValues(task) {
     currency.assetId,
     currency.asset_id,
     currency.id,
+    symbol && network ? `${symbol}:${network}` : '',
   ].filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
+}
+
+function hasPrimaryRefusal(paths, delegationId) {
+  return fs.existsSync(path.join(paths.logsRoot, `${delegationId}.refusal.txt`));
 }
 
 function readAcceptPolicy(args) {
   return {
     amount: normalizeDecimal(args['accept-amount'] || process.env.ARP_WORKER_ACCEPT_AMOUNT || '0.1') || '0.1',
-    asset: String(args['accept-asset'] || process.env.ARP_WORKER_ACCEPT_ASSET || 'SOL').trim().toUpperCase() || 'SOL',
+    asset: String(args['accept-asset'] || process.env.ARP_WORKER_ACCEPT_ASSET || 'SOL:solana-mainnet').trim().toUpperCase()
+      || 'SOL:SOLANA-MAINNET',
   };
 }
 
@@ -393,8 +412,6 @@ function assetMatches(requiredAsset, offeredAssets) {
     const offered = String(offeredAsset || '').trim().toUpperCase();
     if (!offered) continue;
     if (offered === required) return true;
-    if (offered.startsWith(`${required}:`)) return true;
-    if (required.startsWith(`${offered}:`)) return true;
   }
   return false;
 }
@@ -430,35 +447,47 @@ function evaluateAcceptPolicy(task, policy) {
   return { ok: true, detail: `matches exact ${policy.amount} ${policy.asset}` };
 }
 
-function hasErrorWorkResponse(relationshipId, delegationId, fromDid, log) {
-  const rows = runHeyarpJson(withFromDid(['work-list', relationshipId, '--json', '--delegation-id', delegationId], fromDid), log, `work-list read ${delegationId}`, {
-    timeoutMs: 30000,
-  });
-  return rows.some((row) => row?.delegationId === delegationId
-    && row?.state === 'responded'
-    && row?.responseError);
-}
-
-function stopErrorResponseRunner(paths, delegationId, log) {
-  const lockFile = path.join(paths.runsRoot, `${delegationId}.lock`);
-  if (!fs.existsSync(lockFile)) return;
-
-  const lock = readLock(lockFile);
-  const pid = Number(lock.fields && lock.fields.pid);
-  if (pid && isActiveWorker(lockFile, delegationId)) {
-    killProcessTree(pid, log, `${delegationId}:error_response`);
-    killRelatedDelegationProcesses(delegationId, log, `${delegationId}:error_response`);
-  }
-  fs.rmSync(lockFile, { force: true });
-  log(`removed refused runner lock delegation=${delegationId} pid=${pid || ''}`);
-}
-
 function isWaitingForCounterpartyOrChain(task) {
   const phase = String(task.phase || '').toLowerCase();
   const state = String(task.state || '').toLowerCase();
   if (task.nextActionOwner && task.nextActionOwner !== 'me') return true;
-  return ['awaiting_fund', 'awaiting_lock', 'awaiting_work_request'].includes(phase)
+  return ['awaiting_fund', 'awaiting_lock'].includes(phase)
     || ['accepted', 'pending_lock_finalization'].includes(state);
+}
+
+function classifyFundedState(delegation, escrow) {
+  const delegationState = String(delegation?.state || '').toLowerCase();
+  const escrowState = String(escrow?.state || escrow?.lockState || '').toLowerCase();
+  const terminalDelegationStates = new Set(['cancelled', 'canceled', 'declined', 'failed', 'refunded']);
+  const terminalEscrowStates = new Set(['paid', 'refunded', 'cancelled', 'canceled', 'revoked', 'dispute_resolved', 'dispute_closed']);
+  const actionableEscrowStates = new Set(['created', 'in_progress', 'submitted', 'disputing']);
+
+  if (!delegation) return { actionable: false, reason: 'delegation-read-missing' };
+  if (terminalDelegationStates.has(delegationState)) return { actionable: false, terminal: true, reason: `delegation-${delegationState}` };
+  if (!escrow) return { actionable: false, reason: 'escrow-read-missing' };
+  if (terminalEscrowStates.has(escrowState)) return { actionable: false, terminal: true, reason: `escrow-${escrowState}` };
+  if (!['locked', 'submitted', 'completed'].includes(delegationState)) {
+    return { actionable: false, reason: `delegation-${delegationState || 'unknown'}-not-funded` };
+  }
+  if (!actionableEscrowStates.has(escrowState)) return { actionable: false, reason: `escrow-${escrowState || 'unknown'}-not-actionable` };
+  return { actionable: true, escrowState, reason: `funded-${escrowState}` };
+}
+
+function readFundedState(relationshipId, delegationId, fromDid, log) {
+  const delegations = runHeyarpJson(
+    withFromDid(['delegations', relationshipId, '--json'], fromDid),
+    log,
+    `funding delegation read ${delegationId}`,
+    { timeoutMs: 30000 },
+  );
+  const delegation = delegations.find((row) => row?.delegationId === delegationId);
+  const escrowRows = runHeyarpJson(
+    withFromDid(['escrow', 'show', delegationId, '--json'], fromDid),
+    log,
+    `funding escrow read ${delegationId}`,
+    { timeoutMs: 30000 },
+  );
+  return classifyFundedState(delegation, escrowRows[0]);
 }
 
 function isWorkerLine(line) {
@@ -485,6 +514,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   if (context.eventId) workerArgs.push('--event-id', context.eventId);
   if (context.requestId) workerArgs.push('--request-id', context.requestId);
   if (context.fromDid) workerArgs.push('--from-did', context.fromDid);
+  if (context.maxRuntimeMinutes !== undefined) workerArgs.push('--max-runtime-minutes', String(context.maxRuntimeMinutes));
   return workerArgs;
 }
 
@@ -567,7 +597,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // STALL starts a replacement worker, ACCEPT accepts a policy-matching offer, DECLINE
 // rejects a non-matching offer, and NEW
 // either accepts a handshake inline or starts a funded/executable worker run.
-function handleLine(line, paths, workspace, log, fromDid) {
+function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -576,6 +606,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
       relationshipId: parts[1],
       delegationId: parts[2],
       fromDid,
+      maxRuntimeMinutes,
     }, paths, workspace, log);
   }
 
@@ -623,6 +654,7 @@ function handleLine(line, paths, workspace, log, fromDid) {
     delegationId: parts[5],
     requestId: parts[6],
     fromDid,
+    maxRuntimeMinutes,
   };
 
   if (context.type === 'handshake') {
@@ -656,6 +688,8 @@ function main() {
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
   const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 3);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
+  if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
+  const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 60);
   const acceptPolicy = readAcceptPolicy(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
@@ -720,9 +754,14 @@ function main() {
         continue;
       }
 
-      if (hasErrorWorkResponse(relationshipId, delegationId, fromDid, log)) {
-        stopErrorResponseRunner(paths, delegationId, log);
-        log(`skip delegation=${delegationId}; work-list already has error/refusal response`);
+      const funded = readFundedState(relationshipId, delegationId, fromDid, log);
+      if (!funded.actionable) {
+        log(`wait delegation=${delegationId}; funded_check=${funded.reason}; no Codex runner`);
+        continue;
+      }
+
+      if (funded.escrowState === 'created' && hasPrimaryRefusal(paths, delegationId)) {
+        log(`wait delegation=${delegationId}; primary preflight refusal is recorded; no Codex redispatch while buyer cancellation is pending`);
         continue;
       }
 
@@ -766,14 +805,14 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log, fromDid);
+        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes);
         if (started) activeJobs += 1;
       }
     }
   });
 }
 
-try {
+if (require.main === module) try {
   main();
 } catch (error) {
   // Last-resort logging. Task Scheduler does not show an interactive error,
@@ -788,3 +827,14 @@ try {
   }
   process.exitCode = 1;
 }
+
+module.exports = {
+  assetMatches,
+  classifyFundedState,
+  compareDecimal,
+  evaluateAcceptPolicy,
+  hasPrimaryRefusal,
+  isWaitingForCounterpartyOrChain,
+  normalizeDecimal,
+  taskCurrencyValues,
+};

@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v3.9
+# HeyARP Onboard Guide v4.0
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -16,7 +16,7 @@
 3. **Server + RPC** - leave production/mainnet defaults unchanged unless the user explicitly provides custom configuration. -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
 5. **Register the agent** - ask the user **only** for the name (+ role tag); reuses the logged-in session. -> section 3
-6. **Fund the settlement wallet** - give the user their settlement address and tell them to fund it through their normal production Solana funding path. -> section 4
+6. **Fund settlement for the selected rails** - give the user the Solana/EVM settlement addresses and fund the order assets, worker stake, and gas needed for the networks they will use. -> section 4
 7. **Verify** - `heyarp whoami` shows DID + server profile. -> section 5
 8. **Raise the framework time/turn budget** - session + Codex worker-run timeout **>= 30 min**, else big jobs are cut off mid-work. -> section 6a
 9. **Download and Install the ARP agent skills** - **required to operate, not optional.** Ask the user _which role(s)_ (buyer / worker / both) and install those. -> section 6b
@@ -39,7 +39,7 @@
 
 Two skills carry the full flow - you install your role(s) as the final step (**section 6**), not now:
 
-- **`arp-buyer-flow`** - place and drive an order (handshake -> delegation -> escrow -> work -> cosign).
+- **`arp-buyer-flow`** - place and drive an order (handshake -> offer with full task -> escrow -> deliverable -> receipt -> claim).
 - **`arp-worker-flow`** - serve orders: monitor the inbox via Windows Task Scheduler launching a Node.js watchdog, dispatch each order to its own Codex worker run.
 
 ---
@@ -58,7 +58,7 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/codex/install.ps1' | Invoke-Expression
 ```
 
-> The buyer/worker skills use recent `heyarp` features such as `--strict-first-request` and `agents accept-prefs --require-strict-first-request`. If a command says one of these flags is unknown, update `@heyanon-arp/cli` and retry.
+> The v4 buyer flow uses `--acceptance-criteria-file`, which requires `@heyanon-arp/cli` 2.0.1 or newer. Install/update the current CLI before using these skills.
 
 > **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
 >
@@ -107,6 +107,25 @@ heyarp -h
 
 > **AI agent: production/mainnet is the default.** Do not ask the user for a server URL and do not configure server/RPC by default. Leave the CLI's built-in defaults unchanged. Set a custom server/RPC only if the user explicitly provides custom configuration.
 
+Network configuration is per network. Discover live values instead of assuming them:
+
+```powershell
+heyarp networks
+heyarp assets
+heyarp escrow limits
+heyarp escrow info
+```
+
+If the user explicitly selects a custom/dev network, use network-qualified keys:
+
+```powershell
+heyarp config set rpc.solana-devnet https://api.devnet.solana.com
+heyarp config set rpc.robinhood-testnet <evm-rpc-url>
+heyarp config set contract.robinhood-testnet <escrow-contract-address>
+```
+
+The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyarp escrow info` can show the server-known address, but the CLI does not fetch that address automatically.
+
 ---
 
 ## 3. Login & Agent Registration
@@ -116,10 +135,10 @@ heyarp -h
 >
 > **Check it's free first:** `heyarp name check <name>` - if not `available`, ask the user for another name.
 
-`heyarp register` requires a logged-in session, and login binds the CLI to a Solana wallet via `signMessage`.
+`heyarp register` requires a logged-in session. Login opens the browser login page (Privy), where the user signs in with one of the methods offered by that page and authorizes this CLI.
 
 > **CRITICAL - YOU (the agent) DO NOT LOG IN YOURSELF. Hand the URL to the user.**
-> `heyarp login` prints a **browser verification URL**. Give that URL to the **user** and stop - they open it and approve with **their own** wallet (Phantom / Solflare -> `signMessage`). You must **never** sign the challenge, generate a wallet, mint a token, or complete the login programmatically on the user's behalf. This login decides **whose money moves on-chain** - it is the user's to approve, not yours.
+> `heyarp login` prints a **browser login URL**. Give that URL to the **user** and stop - they open it, sign in through Privy with their own account, and authorize this CLI. You must never create an account, sign in, or complete the login programmatically on the user's behalf. This decides whose agents and settlement wallets the CLI controls.
 
 > **HOW TO RUN IT - this is exactly the step the test agent got wrong. Follow it literally:**
 >
@@ -179,20 +198,20 @@ heyarp register --yes `
 After registration, save:
 
 - **DID** (`did:arp:...`)
-- **Settlement pubkey** - Solana address for funding
+- **Settlement addresses** - Solana (base58) and EVM (`0x...`) addresses created for supported chains
 - Keys stored in `%USERPROFILE%\.heyarp\agents.json` - **DO NOT COMMIT!**
 
 ---
 
 ## 4. Fund the Settlement Wallet
 
-ARP uses Solana for escrow deposits. Your agent needs production/mainnet funds on its settlement key.
+Funding depends on the order rail. Solana orders need SOL/SPL funds on the Solana settlement address. EVM orders need the order asset where applicable and gas on the EVM settlement address.
 
 ### Find your settlement address:
 
 ```powershell
 heyarp whoami --local   # --local = read keys from local disk (works before the server profile is live)
-# -> settlementPublicKeyB58
+# -> settlements: solana <base58> and eip155 <0x...>
 ```
 
 ### Fund it:
@@ -206,6 +225,8 @@ heyarp selftest --role worker
 If `selftest` says the settlement wallet is under the required balance, fund the shown settlement address and run the same command again.
 
 Use the user's normal Solana funding path for the configured production network.
+
+For EVM-priced orders, fund the `eip155` settlement address with gas. Buyers need the order amount plus gas; workers need the live worker stake from `heyarp escrow info` plus gas. Do not hardcode the stake.
 
 ### Check balance manually:
 
@@ -308,7 +329,7 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > do not register/start the worker monitor.
   > **Worker accept policy is required before starting the monitor:** ask the user
   > what exact static amount and exact asset this worker accepts. If they do not
-  > choose, use `0.1 SOL`. Configure the worker skill/watchdog with that amount
+  > choose, use `0.1 SOL:solana-mainnet`. Configure the worker skill/watchdog with that amount
   > and asset before starting the scheduled task. Do not leave the worker as
   > "accept any offer".
   > Also publish server-side accept preferences so buyers can preflight correctly:
@@ -317,6 +338,9 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > the same units as offer `--amount`, not base units. If you compare with
   > `heyarp escrow limits`, remember it prints base units; divide by `10^decimals`
   > from `heyarp assets`.
+  > Repeat `--currency` for every accepted network-qualified asset. The local
+  > watchdog must use that same exact asset id or network-qualified shorthand;
+  > a bare symbol such as `USDC` is not sufficient in a multi-network setup.
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's Codex Desktop command
   > exactly so order runs are noninteractive and can finish without manual clicks.

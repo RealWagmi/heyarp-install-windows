@@ -2,7 +2,9 @@
 
 Scope: migrate the Windows installer and `codex` worker/buyer flow from the v3.9 first-work-request model to the v4 protocol model with EVM support.
 
-Target branch: `codex`
+Target branch: `migration` (based on `codex`)
+
+Windows invariant: Task Scheduler starts the long-running SSE daemon; SSE and timed reconciliation wake the watchdog; the watchdog handles cheap handshake/static-offer actions; Codex is started only after positive proof that the buyer funded the delegation. The v4 task is read from the funded delegation row, and primary preflight happens before worker stake.
 
 ## Main Protocol Changes
 
@@ -59,6 +61,7 @@ Target branch: `codex`
 | `worker/arp-worker-sse-daemon.js`         | Likely keep `inbox --tail --json`; verify wake-up reasons still fit v4          |
 | `worker/arp-worker-watchdog-hidden.vbs`   | No expected logic change; verify launch args if new network args are added      |
 | `worker/arp-worker-sse-daemon-hidden.vbs` | No expected logic change; verify launch args if new network args are added      |
+| `worker/arp-worker-watchdog.test.js`      | Add funded-only, fail-closed, exact-asset, and v4 primary-flow tests            |
 
 ## Buyer Skill Plan
 
@@ -180,12 +183,9 @@ Target branch: `codex`
    - For primary path, no work request is expected.
    - Work-list is only for revisions.
 
-3. Keep exact error-response check for revision rows.
-   - Do not use broad guessing.
-   - Only match known work-list fields:
-     - same `delegationId`
-     - `state === "responded"`
-     - `responseError` present
+3. Remove delegation-wide error-response suppression.
+   - A `responseError` closes only its exact revision `requestId`.
+   - Historical revision errors must not block primary settlement, later revisions, or receipt recovery.
 
 4. Keep timeout protection around `heyarp tasks --next --json`.
    - Prevent stuck CLI read from holding monitor lock forever.
@@ -193,6 +193,12 @@ Target branch: `codex`
 5. Update accept policy.
    - Static amount/asset checks still happen before delegation accept.
    - Use `heyarp assets` and server accept-prefs wording in docs.
+   - Match an exact canonical asset id or exact network-qualified shorthand; never prefix-match a bare symbol across networks.
+
+6. Enforce funded-only dispatch positively.
+   - Read the exact delegation and escrow before `NEW` or `STALL` launch.
+   - Allow only funded delegation states plus actionable escrow states.
+   - Unknown/missing states fail closed and do not start Codex.
 
 ## SSE Daemon Plan
 
@@ -200,7 +206,7 @@ Target branch: `codex`
    - It is event-driven wake-up.
    - It should not call API directly.
 
-2. Verify events still wake watchdog for v4 events.
+2. Keep the generic envelope wake so all v4 events wake the watchdog.
    - delegation offer
    - delegation locked/funded
    - delegation submitted
@@ -284,14 +290,14 @@ Target branch: `codex`
 
 1. Should Windows v4 keep the current preflight-before-staking behavior?
    - For v4 primary tasks, preflight can read `description` and `brief` before `escrow accept`.
-   - This is still useful and should stay.
+   - Resolution: yes. Codex still starts only after buyer funding; it preflights while escrow is `created` and before worker stake.
 
 2. What should worker do if funded primary task fails preflight?
    - There is no `work respond --error` for primary task.
-   - Proposed behavior: do not stake, log refusal reason, and let buyer cancel.
+   - Resolution: do not stake, write a durable per-delegation refusal marker, suppress redispatch, and let buyer cancel.
 
 3. Do we support EVM in scripts immediately or docs first?
-   - Safer answer: update scripts and docs together.
+   - Resolution: update scripts and docs together.
    - Docs-only would mislead users if runner cannot actually settle EVM orders.
 
 4. Do we need separate branch version numbers?
