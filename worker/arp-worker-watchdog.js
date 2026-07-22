@@ -781,7 +781,7 @@ function main() {
   const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 1);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
   if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
-  const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 60);
+  const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 0);
   const acceptPolicies = readAcceptPolicies(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);

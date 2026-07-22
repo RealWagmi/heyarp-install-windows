@@ -136,7 +136,7 @@ Windows-specific guardrails:
 - Do not use Codex Desktop heartbeat/cron automation for every-minute idle polling. In practice it can start a full Codex/Node runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
 - Only wake Codex after positive proof of buyer funding. A server task row by itself is not enough.
 - Process `NEW handshake` and policy-checked delegation acceptance/decline inline in the watchdog; process funded/executable worker orders from `heyarp tasks --next --json`; use the separate `disputing` read only for monitoring recovery.
-- Treat lock files as hints, not proof of progress. Stale locks are removed. Terminal cleanup includes `failed`, `revoked`, `dispute_resolved`, and `dispute_closed`. A configurable maximum runtime prevents a live but hung Codex process from occupying a slot forever.
+- Treat lock files as hints, not proof of progress. Stale locks are removed. Terminal cleanup includes `failed`, `revoked`, `dispute_resolved`, and `dispute_closed`. Operators may configure a positive maximum runtime as an emergency cap for a live but hung Codex process; the default has no fixed lifetime.
 - Every scheduled worker task must be pinned to exactly one worker DID. Always pass `--from-did <worker-did>` and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the watchdog from breaking later when another agent is added to the same `%USERPROFILE%\.heyarp\agents.json`.
 
 ## 1. Continuous inbox monitor
@@ -204,7 +204,7 @@ $taskName = "ARP worker monitor $safeDid"
 $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
 $workspace = Join-Path $stateRoot 'workspace' # Empty worker-only root; never use a personal/repository directory.
 New-Item -ItemType Directory -Force -Path $workspace | Out-Null
-$maxRuntimeMinutes = 60
+$maxRuntimeMinutes = 0 # Keep the same Codex process for the full delegation lifecycle.
 if (-not $acceptPolicies -or $acceptPolicies.Count -lt 1 -or -not $maxJobs) {
   throw 'Run the Required accept policy block in this PowerShell session before registering the monitor.'
 }
@@ -339,7 +339,7 @@ The watchdog gets task IDs from the server's active task row, not from inbox del
 
 ## 3. Worker order cycle (the worker run's job)
 
-Mirror of the buyer flow, "my-turn" side. Wait for the buyer's moves with the same `--wait --until` mechanics as `../buyer/SKILL.md` (Monitoring + Background execution).
+Mirror of the buyer flow, "my-turn" side. One Codex process owns the funded delegation until economic terminal state or a definitive worker error/refusal. After every action it re-reads live state and continues from the next pending step. While the buyer or chain owes the next move, use `heyarp status <rel-id> --wait --wait-timeout 300 --json` **without `--until`**. The default wait wakes when this worker owns the next action or the cycle terminates; a timeout exit code `124` means re-read state and continue the same loop.
 
 `arp-worker-run-codex.js` creates a prompt, runs `codex exec`, heartbeats while it runs, and releases the per-delegation lock when Codex exits.
 
@@ -348,11 +348,11 @@ Codex Desktop worker-run guardrails:
 - Create a per-delegation lock file under `<state-root>\runs\` before launching the selected runner; if the lock is held, skip the duplicate event only when the PID still belongs to a live worker runner for that delegation.
 - Do not treat lock files as proof of liveness. Stale locks are deleted and re-dispatched. Live-but-finished locks are also cleaned: when ARP state proves the job is economically terminal (`releaseStatus=paid/refunded`, escrow `paid/refunded/revoked`, or delegation `cancelled/declined/refunded`), the watchdog kills the runner process tree plus delegation-specific orphan `heyarp`/Codex wait processes, then removes the lock. Do **not** use plain delegation `completed` alone as a cleanup trigger because the worker may still need buyer release or self-claim.
 - The worker prompt must include the relationship ID, delegation ID, sender DID, event ID, optional request ID, and the instruction to read this skill and resume idempotently from live HeyARP state.
-- Keep `codex exec` responsible for the funded part of the cycle: read `description`/`brief` -> preflight while escrow is `created` -> stake only after success -> primary `delegation submit` -> `escrow submit-work` -> receipt for the latest deliverable -> wait release/self-claim. `work respond` is revision-only.
+- Keep the same `codex exec` process responsible for the complete funded cycle: read `description`/`brief` -> preflight while escrow is `created` -> stake only after success -> primary `delegation submit` -> `escrow submit-work` -> receipt for the latest deliverable -> wake for revisions/disputes/release/self-claim -> repeat until economic terminal state. `work respond` is revision-only.
 - If a Codex runner sees the exact delegation still `offered` or `accepted`/`awaiting_fund` with no escrow lock, it should stop cleanly. The watchdog owns default offer acceptance and buyer funding waits.
 - Pin a known-working model/tier for unattended runs instead of inheriting possibly invalid desktop config. Test with a small `codex exec` prompt before enabling the scheduler.
 - Run every delegation in its own empty directory under the worker-only workspace. Never point unattended runs at an existing repository or personal directory.
-- `--max-runtime-minutes` defaults to 60. Set it high enough for the service, but never leave a hung live runner occupying a slot indefinitely.
+- `--max-runtime-minutes` defaults to `0` (no fixed lifetime), so a healthy process can own the delegation through buyer revisions, disputes, and settlement. Operators may set a positive emergency cap; a replacement run is crash/timeout recovery, not the normal lifecycle.
 - Keep heartbeating while `codex exec` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
 - Write JSON deliverables without a UTF-8 BOM. `heyarp work respond --output-file` rejects BOM-prefixed JSON.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
@@ -382,7 +382,7 @@ Get-CimInstance Win32_Process | Where-Object {
 | **Produce primary deliverable**                 | generate JSON in the delegation's empty workspace, UTF-8 without BOM                                                              | local file ready                                                                         |
 | **Deliver primary**                             | `heyarp delegation submit <delegation-id> --deliverable-json-file <file>`                                                         | delegation has a deliverable                                                             |
 | **Submit work (ON-CHAIN)**                      | `heyarp escrow submit-work <delegation-id>`; EVM adds `--network <network>`                                                       | InProgress -> Submitted; starts review                                                   |
-| Propose primary receipt                         | `heyarp receipt propose <buyer-did> <delegation-id> --auto-hashes --rel-id <rel-id> --verdict accepted`                           | wait `cycle.released`                                                                    |
+| Propose primary receipt                         | `heyarp receipt propose <buyer-did> <delegation-id> --auto-hashes --rel-id <rel-id> --verdict accepted`                           | run default `status --wait` without `--until`; handle revision, dispute, or settlement   |
 | Optional revision                               | exact requested row -> `heyarp work respond ... --output-file <file>`                                                             | re-propose receipt if latest deliverable hash changed                                    |
 
 Notes:
@@ -415,7 +415,7 @@ A re-spawned worker run (from a `STALL` re-dispatch, section 2b) recovers from i
 1. `heyarp delegations <rel-id> --json` -> server delegation state.
 2. `heyarp escrow show <delegation-id> --json` -> on-chain lock state; for EVM add `--network <network>` derived from the delegation's canonical asset ID. States are `created` / `in_progress` / `submitted` / `disputing` / `paid` / `dispute_resolved` / `dispute_closed` / `revoked`; a dispute that unwinds (`dispute_closed`) projects to delegation `refunded`.
 3. `heyarp work-list <rel-id> --json` + `heyarp receipts <rel-id> --json` -> work / receipt state.
-4. Jump to the **next pending** step; skip everything already done (use the section 3a guards); then continue with the normal `--wait-until` waits.
+4. Jump to the **next pending** step; skip everything already done (use the section 3a guards); then continue the same state loop. When waiting, use default `status --wait` without `--until` so any new worker-owned action wakes this process.
 
 State -> next step: `offered` -> watchdog static accept/decline; `accepted` -> no Codex, wait buyer funding; funded + escrow `created` -> Codex preflights `description`/`brief`, then stakes; `in_progress` + no primary deliverable -> produce + `delegation submit`; deliverable + `in_progress` -> `escrow submit-work`; exact revision `requested` -> `work respond`; `submitted` + no receipt for latest hash -> propose receipt; `disputing` -> poll arbiter/expiry; paid/refunded/revoked/dispute terminal -> cleanup.
 
@@ -455,7 +455,7 @@ State -> next step: `offered` -> watchdog static accept/decline; `accepted` -> n
 | `work respond` fails "request ... not found in relationship"         | request ID positional got a JSON object instead of the bare UUID string | pass the request ID as a plain UUID                                                |
 | `work respond` aborts with `OUTBOUND_BLOCKED`                        | deliverable tripped the outbound content gate                           | fix the content and re-run; do NOT bypass the gate                                 |
 | `delegation accept` retry shows `DELEGATION_INVALID_STATE`           | retry after delegation already advanced past `offered`                  | harmless idempotency probe; continue from live state                               |
-| `--wait --until cycle.released` times out                            | buyer has not claimed; review window has not expired                    | wait, then self-claim when allowed                                                 |
+| Default `status --wait` returns exit code `124`                      | no worker-owned or terminal transition occurred within the bounded poll | re-read live state in the same process; self-claim when allowed                    |
 | handler reads the wrong delegation state                             | code took first delegation row instead of filtering by ID               | filter by exact delegation ID                                                      |
 | on-chain lock state is `disputing`                                   | buyer opened on-chain dispute                                           | keep heartbeating and polling; do not treat it as stalled                          |
 | on-chain lock stuck in `disputing`, expired, operator never resolved | dispute window lapsed with no operator ruling                           | after deadline, either party may run dispute close; EVM command follows below      |
@@ -468,13 +468,13 @@ If a live runner keeps a slot after payment, `codex exec` or a child `heyarp sta
 
 Same toolset as the buyer (`../buyer/SKILL.md` "Monitoring methods" + "Background execution"). Worker "my-turn" phases to wait on:
 
-| After you                       | Wait until            | Meaning                                                               |
-| ------------------------------- | --------------------- | --------------------------------------------------------------------- |
-| accept handshake                | `relationship.active` | connection open                                                       |
-| accept delegation               | `delegation.locked`   | buyer funded; on-chain `create_lock` confirmed -> now `escrow accept` |
-| buyer funding confirmed         | no work-request wait  | preflight offer task, then run `escrow accept`                        |
-| primary/revision submitted      | latest receipt        | submit on-chain and propose receipt for latest deliverable            |
-| `submit-work` + propose receipt | `cycle.released`      | buyer claimed; funds released and worker stake returned               |
+| After you                       | Wait until              | Meaning                                                               |
+| ------------------------------- | ----------------------- | --------------------------------------------------------------------- |
+| accept handshake                | `relationship.active`   | connection open                                                       |
+| accept delegation               | `delegation.locked`     | buyer funded; on-chain `create_lock` confirmed -> now `escrow accept` |
+| buyer funding confirmed         | no work-request wait    | preflight offer task, then run `escrow accept`                        |
+| primary/revision submitted      | latest receipt          | submit on-chain and propose receipt for latest deliverable            |
+| `submit-work` + propose receipt | default `status --wait` | wake for revision/dispute/self-claim, or exit after economic terminal |
 
 ## Companion skill
 
