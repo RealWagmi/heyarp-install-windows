@@ -70,7 +70,7 @@ Context:
 - refusalLog: ${context.refusalLog}
 
 Required behavior:
-1. Read live state with heyarp delegations, heyarp escrow show, heyarp work-list, and heyarp receipts${context.fromDid ? `, always passing --from-did ${context.fromDid}` : ''}.
+1. Read the exact delegation first with heyarp delegations ${context.relationshipId} --json${context.fromDid ? ` --from-did ${context.fromDid}` : ''}. Derive its settlement network from the canonical currency asset ID; use heyarp networks --json to map its CAIP-2 prefix to the network name. Then read heyarp escrow show ${context.delegationId} --json, heyarp work-list ${context.relationshipId} --json, and heyarp receipts ${context.relationshipId} --json${context.fromDid ? `, always passing --from-did ${context.fromDid}` : ''}. For an eip155 delegation, add --network <network> to escrow show and every later escrow command; never let an EVM read fall through to the default Solana path.
 2. If delegation is offered, stop cleanly; the watchdog accepts or declines offers inline before starting this runner.
 3. If delegation is accepted/awaiting_fund and no escrow lock exists, stop cleanly; the watchdog/SSE daemon will re-check later without consuming a runner slot.
 4. The primary task is already in the accepted delegation row: use its exact description and brief. Do not wait for work.requested; work requests are revision rounds only.

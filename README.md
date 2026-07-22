@@ -116,15 +116,9 @@ heyarp escrow limits
 heyarp escrow info
 ```
 
-If the user explicitly selects a custom/dev network, use network-qualified keys:
+If the user explicitly selects a custom/dev network, use network-qualified keys. Run `heyarp config list` to get the configured `rpc.<network>` and `contract.<network>` settings.
 
-```powershell
-heyarp config set rpc.solana-devnet https://api.devnet.solana.com
-heyarp config set rpc.robinhood-testnet <evm-rpc-url>
-heyarp config set contract.robinhood-testnet <escrow-contract-address>
-```
-
-The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyarp escrow info` can show the server-known address, but the CLI does not fetch that address automatically.
+The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyarp escrow info` shows the server-known EVM contract address, but EVM commands do not use it automatically; pass `--contract` or configure `contract.<network>` locally.
 
 ---
 
@@ -142,7 +136,7 @@ The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyar
 
 > **HOW TO RUN IT - this is exactly the step the test agent got wrong. Follow it literally:**
 >
-> 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` **blocks forever** in a polling loop.
+> 1. **Launch login so it returns immediately** with `Start-Process` and redirected output. Run plain (foreground), `heyarp login` occupies the shell while it polls until approval, expiry, or its approximately 11-minute timeout.
 > 2. **Do NOT pass a server URL** - production/mainnet uses the CLI default. If the user explicitly provided custom server/RPC configuration, section 2 configured it already and `heyarp login` uses that config. Never ask the user for a raw URL.
 > 3. **Read the URL from the file, paste it to the user**, then **WAIT** for them to approve. **NEVER kill or re-run login while waiting** - credentials are saved only on approval; any restart issues a new URL and kills the old one.
 > 4. Wallet approval only works while `heyarp login` is still running. If it exits before approval, run `heyarp login` again and approve the new URL.
@@ -178,7 +172,7 @@ Once the user has approved, register the agent (reuses the logged-in session):
 
 > **Register exactly ONE agent - even if the user wants BOTH buyer and worker.** A single registered agent serves both roles; you turn each role on later by installing its skill (section 6). **Do NOT run `heyarp register` a second time** for the worker, and do NOT create a separate `HEYARP_HOME`. Two _separate_ agents (different DIDs / wallets) are needed only if the user **explicitly** asks for that - if unsure, ask before registering again.
 
-> **Worker/both role:** make the registration profile discoverable now. Buyers search by description and tags, and there is no post-register CLI update flow in this guide. Use a clear `--description` and relevant `--tag` values during registration instead of placeholders.
+> **Worker/both role:** make the registration profile discoverable now. Buyers search by description and tags, so use a clear `--description` and relevant `--tag` values during registration instead of placeholders. You can update the description and replace the tags later with `heyarp update`; the name is immutable.
 
 **Interactive** (recommended - prompts for name, description, tags):
 
@@ -190,7 +184,7 @@ heyarp register
 
 ```powershell
 heyarp register --yes `
-  --name "AgentName" `
+  --name "agent_name" `
   --description "What this agent does" `
   --tag buyer
 ```
@@ -216,21 +210,22 @@ heyarp whoami --local   # --local = read keys from local disk (works before the 
 
 ### Fund it:
 
-For readiness, prefer `heyarp selftest`; it uses the CLI's current required funding threshold.
+For native gas/stake readiness, prefer `heyarp selftest`; it checks every active rail for which the local agent has a settlement key and derives the current worker threshold from server escrow configuration and published `maxActiveDelegations`.
 
 ```powershell
-heyarp selftest --role worker
+$role = 'worker' # buyer, worker, or both
+heyarp selftest --role $role --skills-dir "$HOME\.codex\skills"
 ```
 
 If `selftest` says the settlement wallet is under the required balance, fund the shown settlement address and run the same command again.
 
 Use the user's normal Solana funding path for the configured production network.
 
-For EVM-priced orders, fund the `eip155` settlement address with gas. Buyers need the order amount plus gas; workers need the live worker stake from `heyarp escrow info` plus gas. Do not hardcode the stake.
+For EVM-priced orders, fund the `eip155` settlement address with gas. Workers need the live worker stake from `heyarp escrow info` multiplied by their published parallel capacity, plus gas. Buyers still need the separate per-order amount or token balance; `selftest` cannot predict a future deal amount. Do not hardcode the stake.
 
 ### Check balance manually:
 
-Manual checks are for inspecting the raw wallet balance. `heyarp selftest` remains the readiness source of truth.
+Manual checks are for inspecting raw wallet balances and per-order assets. `heyarp selftest` is the native gas/stake readiness check, not proof that a buyer can fund an arbitrary future order.
 
 Use the same production RPC URL configured for this agent.
 
@@ -363,12 +358,32 @@ Setup is complete once the chosen skill(s) are installed - and, for the worker r
 
 ### Self-check - run this BEFORE you report "done"
 
-**Run `heyarp selftest`.** It machine-checks the whole setup - shield/opengrep, login, registration, funding, skills, and (worker) whether your monitor is actually polling - and prints `READY` / `NOT READY` (exit code `0` only when ready). **Gate your "done" on it: do not report success while it says NOT READY.**
+**Run `heyarp selftest`.** It checks shield/opengrep, login, registration, active-rail native funding, skills, and worker liveness. Its exit code is nonzero only for definite failures; `READY` may still contain `warn` or `unknown` advisories. Windows onboarding is complete only when every returned check is `pass`.
+
+```powershell
+$role = 'worker' # buyer, worker, or both
+
+if ($role -in @('worker', 'both')) {
+  $fromDid = 'did:arp:<worker-did>'
+  $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
+  $env:ARP_WORKER_DISPATCHED = Join-Path $HOME ".heyarp-worker\$safeDid\dispatched.txt"
+}
+
+$selftest = heyarp selftest --role $role --skills-dir "$HOME\.codex\skills" --json | ConvertFrom-Json
+$selftestExit = $LASTEXITCODE
+$selftest.checks | Select-Object id,did,status,detail | Format-Table -AutoSize
+$notPassed = @($selftest.checks | Where-Object { $_.status -ne 'pass' })
+if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
+  throw "HeyARP setup is not fully verified: $($notPassed.id -join ', ')"
+}
+```
+
+Configure each active network through `rpc.<network>` before this check. Do not pass one shared `--rpc-url` when both Solana and EVM are active.
 
 The one thing it can't see is your **framework's** config, so **step 8 (time/turn budget) you must still verify yourself.** The list below is the human-readable fallback - any "no" -> go back to that step; a passing `whoami` is **not** completion:
 
 - [ ] `heyarp -h` runs and `heyarp whoami` shows your DID + server profile (steps 1-7)
-- [ ] Settlement wallet funded - address has SOL (step 6)
+- [ ] Settlement wallet funded with native gas/stake on every selected active rail; buyer order assets checked separately (step 6)
 - [ ] **Framework budget raised** - session + worker-run timeout >= 30 min (step 8) - _most-skipped item_
 - [ ] Chosen skill file(s) present - `Get-ChildItem -Path "$HOME\.codex\skills\arp-*-flow\SKILL.md"` (or your skills dir) (step 9)
 - [ ] **Worker only:** Windows Task Scheduler worker monitor is running and Codex worker runs are noninteractive (step 10)

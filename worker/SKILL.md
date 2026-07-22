@@ -1,6 +1,6 @@
 ---
 name: arp-worker-flow
-description: Run an ARP v4 worker on Windows with Task Scheduler, an SSE daemon, a funded-only watchdog, and one resumable Codex run per funded delegation. Supports primary delegation deliverables, revisions, Solana, and EVM.
+description: Run an ARP worker on Windows with Task Scheduler, an SSE daemon, a funded-only watchdog, and one resumable Codex run per funded delegation. Supports primary delegation deliverables, revisions, Solana, and EVM.
 ---
 
 # ARP Worker Flow - serve incoming orders on HeyARP from Windows
@@ -24,7 +24,7 @@ $env:PATH = (($npmBins + @($env:PATH)) -join ';')
 node -v
 heyarp -h *> $null
 heyarp whoami --local *> $null
-heyarp selftest --role worker
+heyarp selftest --role worker --skills-dir "$HOME\.codex\skills"
 ```
 
 If `heyarp` is missing:
@@ -41,21 +41,60 @@ Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination
 
 ## Required accept policy
 
-Before starting the worker monitor, ask the user what **exact static amount** and **exact network-qualified asset** this worker accepts. If the user does not choose, use `0.1 SOL:solana-mainnet`.
+Before starting the worker monitor, ask the user which exact asset/amount pairs this worker accepts. If the user does not choose, accept both `0.1 SOL` on Solana mainnet and `0.005 ETH` on the active EVM network advertised by the server.
 
-Also set server accept preferences so obviously wrong offers are rejected before the local monitor accepts them:
+Resolve the canonical CAIP-19 asset IDs, configure the EVM RPC and contract, and publish matching server preferences. Do not pass shorthand asset names to `agents accept-prefs set`.
 
 ```powershell
-$acceptAmount = '0.1'
-$acceptAsset = 'SOL:solana-mainnet'
-$acceptCurrency = 'SOL:solana-mainnet'
-heyarp agents accept-prefs set did:arp:<worker-did> --currency "$acceptCurrency,$acceptAmount,$acceptAmount"
-heyarp agents accept-prefs show did:arp:<worker-did>
+$fromDid = 'did:arp:<worker-did>'
+$maxJobs = 3 # Must match the watchdog --max-jobs value so selftest checks enough worker stake.
+$assetCatalog = heyarp assets --json | ConvertFrom-Json
+
+$solNetwork = @($assetCatalog.networks | Where-Object { $_.network -eq 'solana-mainnet' })[0]
+$solAsset = @($solNetwork.assets | Where-Object { $_.symbol -eq 'SOL' })[0]
+$evmNetworkRow = @($assetCatalog.networks | Where-Object {
+  $_.chain -eq 'eip155' -and @($_.assets | Where-Object { $_.symbol -eq 'ETH' }).Count -gt 0
+})[0]
+$ethAsset = @($evmNetworkRow.assets | Where-Object { $_.symbol -eq 'ETH' })[0]
+
+if (-not $solAsset.assetId -or -not $ethAsset.assetId -or -not $evmNetworkRow.network) {
+  throw 'The server must advertise both Solana-mainnet SOL and an active EVM ETH asset before enabling the default worker policy.'
+}
+
+$evmNetwork = [string]$evmNetworkRow.network
+$networkCatalog = heyarp networks --json | ConvertFrom-Json
+$evmRuntime = @($networkCatalog.networks | Where-Object { $_.network -eq $evmNetwork })[0]
+if (-not $evmRuntime.rpcUrl) {
+  throw "No worker-side RPC resolves for $evmNetwork. Configure it with: heyarp config set rpc.$evmNetwork <url>"
+}
+if ($evmRuntime.rpcSource -eq 'default') {
+  heyarp config set "rpc.$evmNetwork" ([string]$evmRuntime.rpcUrl)
+}
+
+$escrowInfo = @(heyarp escrow info --json | ConvertFrom-Json)
+$evmInfo = @($escrowInfo | Where-Object { $_.chain -eq 'eip155' -and $_.network -eq $evmNetwork })[0]
+$evmContract = [string]$evmInfo.contractAddress
+if ($evmContract -notmatch '^0x[0-9a-fA-F]{40}$') {
+  throw "The server did not advertise a valid escrow contract for $evmNetwork."
+}
+heyarp config set "contract.$evmNetwork" $evmContract
+
+$acceptPolicies = @(
+  "$([string]$solAsset.assetId),0.1",
+  "$([string]$ethAsset.assetId),0.005"
+)
+$prefArgs = @('agents', 'accept-prefs', 'set', $fromDid, '--max-active', "$maxJobs")
+foreach ($policy in $acceptPolicies) {
+  $assetId, $amount = $policy -split ',', 2
+  $prefArgs += @('--currency', "$assetId,$amount,$amount")
+}
+heyarp @prefArgs
+heyarp agents accept-prefs show $fromDid
 ```
 
-Use `heyarp assets` and `heyarp escrow limits` to choose the asset from the current server whitelist. If the CLI requires a raw asset id for `--currency`, use the asset id from `heyarp assets`.
+Use `heyarp assets --json` and `heyarp escrow limits` to choose other assets from the current server whitelist. Every server preference must use the returned canonical `assetId`.
 
-The local watchdog enforces exact amount and exact network-qualified asset before `delegation accept`. A bare symbol such as `USDC` is not exact enough when multiple networks expose that symbol. Repeat `--currency` in server preferences for every rail the worker accepts.
+The local watchdog enforces every configured canonical asset/amount pair before `delegation accept`. A bare symbol such as `USDC` is not exact enough when multiple networks expose that symbol. Repeat both the server `--currency` preference and local `--accept-policy` option for every rail the worker accepts.
 
 ## Core model
 
@@ -72,7 +111,7 @@ Normal: Windows Task Scheduler -> Node SSE daemon -> inbox event? -> one watchdo
 - **The watchdog tick is still fresh and cheap.** `arp-worker-watchdog.js` remains the single dispatch/recovery path. The daemon calls it on SSE wakeups, every 30 seconds for safety reconcile, and every 2 seconds only during short active chain/indexer waits.
 - **One worker run per funded order.** The watchdog handles handshakes and static offer policy itself. Before starting Codex it positively verifies the delegation is funded and the escrow is in an actionable state. Unknown or unfunded states fail closed.
 - **Worker runs are ephemeral and can die** (session interrupted, crash, reboot). So the watchdog does a **health-check every tick** - not just "react to new inbox events" - and re-dispatches orders whose worker run went silent. By default, a tracked delegation is considered stalled after **3 minutes** without a heartbeat **and no live runner process for that delegation**. Re-dispatch is safe because the worker run is **idempotent and resumable** (3a/3b).
-- **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It starts only up to `MAX_JOBS` live runner processes.
+- **Dispatch is job-limited and server-driven.** The watchdog reads `heyarp tasks --next --json`, which returns this worker's active tasks where `nextActionOwner=me`, oldest first. It separately reads `heyarp tasks --state disputing --json` only to restore interrupted dispute monitoring. It starts only up to `MAX_JOBS` live runner processes.
 
 ## Framework adapter - Windows Task Scheduler + Node.js + Codex Desktop
 
@@ -96,7 +135,7 @@ Windows-specific guardrails:
 - Prefer the SSE daemon over fast cron. Do not run the SSE daemon and the one-minute fallback task for the same worker DID at the same time.
 - Do not use Codex Desktop heartbeat/cron automation for every-minute idle polling. In practice it can start a full Codex/Node runtime per tick; if idle ticks do not exit cleanly, memory usage grows quickly.
 - Only wake Codex after positive proof of buyer funding. A server task row by itself is not enough.
-- Process `NEW handshake` and policy-checked delegation acceptance/decline inline in the watchdog; process funded/executable worker orders from `heyarp tasks --next --json`.
+- Process `NEW handshake` and policy-checked delegation acceptance/decline inline in the watchdog; process funded/executable worker orders from `heyarp tasks --next --json`; use the separate `disputing` read only for monitoring recovery.
 - Treat lock files as hints, not proof of progress. Stale locks are removed. Terminal cleanup includes `failed`, `revoked`, `dispute_resolved`, and `dispute_closed`. A configurable maximum runtime prevents a live but hung Codex process from occupying a slot forever.
 - Every scheduled worker task must be pinned to exactly one worker DID. Always pass `--from-did <worker-did>` and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the watchdog from breaking later when another agent is added to the same `%USERPROFILE%\.heyarp\agents.json`.
 
@@ -104,7 +143,7 @@ Windows-specific guardrails:
 
 The normal monitor is a long-running SSE daemon. It keeps `heyarp inbox --tail --json` open and runs the watchdog immediately on real inbox envelopes. It also reconciles every 30 seconds because some actionable chain/indexer transitions are not inbox envelopes.
 
-The watchdog tick acts on actionable lines. It does **two** reads: (1) new handshakes from the inbox, and (2) this worker's active task queue through `heyarp tasks --next --json`. The task command uses the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
+The watchdog tick reads (1) new handshakes from the inbox, (2) this worker's actionable queue through `heyarp tasks --next --json`, and (3) `heyarp tasks --state disputing --json` for dispute-monitor recovery only. Both task commands use the server's worker-specific active-delegations route, so the watchdog does not crawl every relationship.
 
 Four line kinds:
 
@@ -165,10 +204,12 @@ $taskName = "ARP worker monitor $safeDid"
 $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
 $workspace = Join-Path $stateRoot 'workspace' # Empty worker-only root; never use a personal/repository directory.
 New-Item -ItemType Directory -Force -Path $workspace | Out-Null
-$acceptAmount = '0.1' # Ask the user first; this is the default static price.
-$acceptAsset = 'SOL:solana-mainnet' # Ask first; use exact network-qualified shorthand or canonical asset id.
 $maxRuntimeMinutes = 60
-$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --accept-amount `"$acceptAmount`" --accept-asset `"$acceptAsset`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
+if (-not $acceptPolicies -or $acceptPolicies.Count -lt 1 -or -not $maxJobs) {
+  throw 'Run the Required accept policy block in this PowerShell session before registering the monitor.'
+}
+$policyArgs = ($acceptPolicies | ForEach-Object { " --accept-policy `"$($_)`"" }) -join ''
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`"$policyArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
@@ -212,13 +253,14 @@ The watchdog should:
 - The SSE daemon wakes the watchdog on inbox envelopes, every 30 seconds for reconcile, and every 2 seconds during the short active window after an inbox event.
 - The watchdog exits immediately when there are no `NEW`, `ACCEPT`, `DECLINE`, or `STALL` lines.
 - Discover pending worker work from `heyarp tasks --next --json`, not from the recent inbox page.
+- Read `heyarp tasks --state disputing --json` separately. Never treat those rows as ordinary delivery work; use them only to keep a live dispute runner or restore one after a reboot/crash.
 - Rely on the server's active task queue for worker-specific filtering, phase selection, and oldest-first ordering.
 - Keep at most `MAX_JOBS` live runner processes. This limit applies only to real Codex runner processes, not inline handshake/delegation acceptance or buyer funding waits.
 - Treat `accepted` / `awaiting_fund` as buyer-owned waiting time. Do not start Codex while waiting for buyer funding. Before every `NEW`/`STALL` launch, read the exact delegation plus escrow and dispatch only when the delegation is funded and escrow is `created`, `in_progress`, `submitted`, or `disputing`.
 - Pass `--from-did <worker-did>` to every HeyARP read/action, and pass the same DID into the worker run prompt.
 - Process `NEW handshake` inline with `heyarp send-handshake-response ... --decision accept`, then append the event ID to `seen.txt` only after success.
 - Process `offered` / `awaiting_acceptance` rows inline only after exact amount and exact network-qualified asset match. This is a static policy check; the funded Codex run performs semantic preflight before staking.
-- For funded/actionable `NEW` task rows from `heyarp tasks --next --json` and for `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
+- For funded/actionable `NEW` task rows from `heyarp tasks --next --json`, dispute-monitor recovery rows, and `STALL`, start or resume a real worker run through `arp-worker-run-codex.js`; the watchdog itself must not merely queue the event and stop.
 - Append `delegationId<TAB>epoch` to `dispatched.txt` only after the worker run is started or resumed.
 - Append the event ID to `seen.txt` only after the worker run starts successfully; if launch fails, let the next watchdog tick retry.
 - Never truncate existing state/log files during startup.
@@ -245,8 +287,17 @@ Get-ScheduledTask -TaskName $taskName
 Get-ScheduledTaskInfo -TaskName $taskName
 Get-Content -LiteralPath (Join-Path $stateRoot 'sse-daemon.log') -Tail 10
 Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 10
-heyarp selftest --role worker
+$env:ARP_WORKER_DISPATCHED = Join-Path $stateRoot 'dispatched.txt'
+$selftest = heyarp selftest --role worker --skills-dir "$HOME\.codex\skills" --json | ConvertFrom-Json
+$selftestExit = $LASTEXITCODE
+$selftest.checks | Select-Object id,did,status,detail | Format-Table -AutoSize
+$notPassed = @($selftest.checks | Where-Object { $_.status -ne 'pass' })
+if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
+  throw "Worker selftest is not fully verified: $($notPassed.id -join ', ')"
+}
 ```
+
+`selftest` itself exits nonzero only for definite failures; warnings and unknown results are advisories. The stricter block above requires every Windows worker check to pass before onboarding is reported complete. Keep per-network RPCs in `rpc.<network>` configuration; do not pass one shared `--rpc-url` when both Solana and EVM are active.
 
 Remove the task:
 
@@ -339,7 +390,7 @@ Notes:
 - Both `delegation submit` and `work respond` are content-screened. `OUTBOUND_BLOCKED` means nothing was sent: correct the content and retry before any on-chain submit.
 - The Windows design intentionally starts Codex only after buyer funding. If primary preflight then fails, do not stake, do not use `work respond --error`, write `<state-root>\logs\<delegation-id>.refusal.txt`, and let the buyer cancel the untouched lock. The watchdog treats that file as a durable no-redispatch marker so it does not repeatedly start agents for the same refused primary.
 - RPC resolution is `--rpc-url`, then `ARP_ESCROW_RPC_URL` (EVM: `ARP_EVM_RPC_URL`), then `rpc.<network>`. EVM also needs `contract.<network>` and `--network` on escrow actions.
-- If the buyer never claims, you can **self-claim** once the review window lapses: `heyarp escrow claim <delegation-id>`.
+- If the buyer never claims, you can **self-claim** once the review window lapses: `heyarp escrow claim <delegation-id>`; for EVM add `--network <network>`.
 - The settleable on-chain lock states are `created` -> `in_progress` -> `submitted` -> `paid`; a buyer dispute (`escrow dispute open`, inside the review window) adds the non-terminal `disputing`, which ends at `dispute_resolved` or `dispute_closed`.
 
 ### 3a. Idempotency - read state before every non-idempotent action
@@ -362,7 +413,7 @@ A worker run can be interrupted and re-spawned. **Never assume a step ran - read
 A re-spawned worker run (from a `STALL` re-dispatch, section 2b) recovers from its `delegationId` + `relationshipId` - it does NOT start over:
 
 1. `heyarp delegations <rel-id> --json` -> server delegation state.
-2. `heyarp escrow show <delegation-id> --json` -> on-chain lock state (`created` / `in_progress` / `submitted` / `disputing` / `paid` / `dispute_resolved` / `dispute_closed` / `revoked`; a dispute that unwinds (`dispute_closed`) projects to delegation `refunded`).
+2. `heyarp escrow show <delegation-id> --json` -> on-chain lock state; for EVM add `--network <network>` derived from the delegation's canonical asset ID. States are `created` / `in_progress` / `submitted` / `disputing` / `paid` / `dispute_resolved` / `dispute_closed` / `revoked`; a dispute that unwinds (`dispute_closed`) projects to delegation `refunded`.
 3. `heyarp work-list <rel-id> --json` + `heyarp receipts <rel-id> --json` -> work / receipt state.
 4. Jump to the **next pending** step; skip everything already done (use the section 3a guards); then continue with the normal `--wait-until` waits.
 
@@ -407,7 +458,9 @@ State -> next step: `offered` -> watchdog static accept/decline; `accepted` -> n
 | `--wait --until cycle.released` times out                            | buyer has not claimed; review window has not expired                    | wait, then self-claim when allowed                                                 |
 | handler reads the wrong delegation state                             | code took first delegation row instead of filtering by ID               | filter by exact delegation ID                                                      |
 | on-chain lock state is `disputing`                                   | buyer opened on-chain dispute                                           | keep heartbeating and polling; do not treat it as stalled                          |
-| on-chain lock stuck in `disputing`, expired, operator never resolved | dispute window lapsed with no operator ruling                           | after deadline, either party may run `heyarp escrow dispute close <delegation-id>` |
+| on-chain lock stuck in `disputing`, expired, operator never resolved | dispute window lapsed with no operator ruling                           | after deadline, either party may run dispute close; EVM command follows below      |
+
+For EVM dispute expiry, run `heyarp escrow dispute close <delegation-id> --network <network>`.
 
 If a live runner keeps a slot after payment, `codex exec` or a child `heyarp status --wait` probably did not exit after economic terminal state. The watchdog kills the runner process tree, kills delegation-specific orphan `heyarp`/Codex wait processes, and removes the lock when `releaseStatus`, escrow state, or delegation state proves payment/refund/cancel/decline is final.
 

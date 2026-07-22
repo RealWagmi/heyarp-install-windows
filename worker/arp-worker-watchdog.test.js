@@ -8,7 +8,9 @@ const path = require('node:path');
 
 const {
   assetMatches,
+  buildEscrowShowArgs,
   classifyFundedState,
+  evaluateAcceptPolicies,
   evaluateAcceptPolicy,
   hasPrimaryRefusal,
   isWaitingForCounterpartyOrChain,
@@ -27,6 +29,7 @@ test('funded v4 primary and recovery states are actionable', () => {
   assert.equal(classifyFundedState({ state: 'submitted' }, { state: 'in_progress' }).actionable, true);
   assert.equal(classifyFundedState({ state: 'completed' }, { state: 'submitted' }).actionable, true);
   assert.equal(classifyFundedState({ state: 'locked' }, { state: 'disputing' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'disputing' }, { state: 'disputing' }).actionable, true);
 });
 
 test('unknown and terminal escrow states fail closed', () => {
@@ -57,6 +60,33 @@ test('accept policy requires exact amount and asset', () => {
   assert.equal(evaluateAcceptPolicy({ amount: '0.10', currency: 'SOL:solana-mainnet' }, policy).ok, true);
   assert.equal(evaluateAcceptPolicy({ amount: '0.1', currency: 'SOL:solana-devnet' }, policy).ok, false);
   assert.equal(evaluateAcceptPolicy({ amount: '0.2', currency: 'SOL:solana-mainnet' }, policy).ok, false);
+});
+
+test('escrow show selects EVM mode from the canonical asset id', () => {
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-1', { currency: { assetId: 'eip155:46630/slip44:60' } }),
+    ['escrow', 'show', 'delegation-1', '--network', 'robinhood-testnet', '--json'],
+  );
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-2', { currency: { assetId: 'eip155:4663/slip44:60' } }),
+    ['escrow', 'show', 'delegation-2', '--network', 'robinhood-mainnet', '--json'],
+  );
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-3', { currency: { assetId: 'solana:mainnet/slip44:501' } }),
+    ['escrow', 'show', 'delegation-3', '--json'],
+  );
+  assert.equal(buildEscrowShowArgs('delegation-4', { currency: { assetId: 'eip155:999/slip44:60' } }), null);
+});
+
+test('multiple accept policies allow different exact prices per asset', () => {
+  const policies = [
+    { amount: '0.1', asset: 'SOLANA:MAINNET/SLIP44:501' },
+    { amount: '0.005', asset: 'EIP155:46630/SLIP44:60' },
+  ];
+  assert.equal(evaluateAcceptPolicies({ amount: '0.1', currency: { assetId: 'solana:mainnet/slip44:501' } }, policies).ok, true);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.005', currency: { assetId: 'eip155:46630/slip44:60' } }, policies).ok, true);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.1', currency: { assetId: 'eip155:46630/slip44:60' } }, policies).ok, false);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.005', currency: { assetId: 'solana:mainnet/slip44:501' } }, policies).ok, false);
 });
 
 test('primary refusal marker suppresses funded redispatch', () => {
