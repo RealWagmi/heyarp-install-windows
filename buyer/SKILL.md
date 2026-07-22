@@ -266,8 +266,11 @@ By the time the receipt is `proposed`, the worker has already (on-chain) accepte
 ```powershell
 # BUYER approves: claim_work_payment releases the escrow to the worker
 # (full amount minus the protocol fee) and returns the worker's stake.
-# Submitted -> Paid. For EVM add --network $EVM_NETWORK.
+# Submitted -> Paid (Solana):
 heyarp escrow claim $DELEGATION_ID
+
+# Submitted -> Paid (EVM):
+heyarp escrow claim $DELEGATION_ID --network $EVM_NETWORK
 ```
 
 Confirm on-chain:
