@@ -116,7 +116,14 @@ heyarp escrow limits
 heyarp escrow info
 ```
 
-If the user explicitly selects a custom/dev network, use network-qualified keys. Run `heyarp config list` to get the configured `rpc.<network>` and `contract.<network>` settings.
+If the user explicitly selects the dev/test networks, select the HeyARP dev server first, then confirm that it offers both development networks:
+
+```powershell
+heyarp config set server https://dev.api.heyanon.ai/arp
+heyarp networks
+```
+
+Confirm that `solana-devnet` and `robinhood-testnet` are active before login or registration. For any other custom server or network, use the configuration explicitly provided by the user. Use network-qualified keys, and run `heyarp config list` to inspect the configured `rpc.<network>` and `contract.<network>` settings.
 
 The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyarp escrow info` shows the server-known EVM contract address, but EVM commands do not use it automatically; pass `--contract` or configure `contract.<network>` locally.
 
