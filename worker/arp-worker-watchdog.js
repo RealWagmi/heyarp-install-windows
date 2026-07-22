@@ -778,7 +778,7 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
-  const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 3);
+  const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 1);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
   if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
   const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 60);

@@ -47,7 +47,7 @@ Resolve the canonical CAIP-19 asset IDs, configure the EVM RPC and contract, and
 
 ```powershell
 $fromDid = 'did:arp:<worker-did>'
-$maxJobs = 3 # Must match the watchdog --max-jobs value so selftest checks enough worker stake.
+$maxJobs = 1 # Must match the watchdog --max-jobs value so selftest checks enough worker stake.
 $assetCatalog = heyarp assets --json | ConvertFrom-Json
 
 $solNetwork = @($assetCatalog.networks | Where-Object { $_.network -eq 'solana-mainnet' })[0]
@@ -156,7 +156,7 @@ Four line kinds:
 
 `STALL_MIN` defaults to 3 minutes. Override it only when needed by passing `--stall-min <minutes>` to `arp-worker-watchdog.js`. A stale heartbeat does not emit `STALL` while the per-delegation runner process is still alive.
 
-`MAX_JOBS` defaults to 3. Override it with `--max-jobs <count>` or `ARP_WORKER_MAX_JOBS=<count>`. When capacity is full, the watchdog does not append the event to `seen.txt`; the next tick retries the same pending delegation.
+`MAX_JOBS` defaults to 1. Override it with `--max-jobs <count>` or `ARP_WORKER_MAX_JOBS=<count>`. When capacity is full, the watchdog does not append the event to `seen.txt`; the next tick retries the same pending delegation.
 
 Minimal Windows layout:
 
