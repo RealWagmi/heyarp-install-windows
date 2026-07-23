@@ -16,7 +16,7 @@ const {
   hasPrimaryRefusal,
   isWaitingForCounterpartyOrChain,
   taskCurrencyValues,
-} = require('./arp-worker-watchdog.js');
+} = require('../worker/arp-worker-watchdog.js');
 
 test('worker runner arguments preserve the explicit Claude Code executable path', () => {
   const args = buildWorkerArgs({

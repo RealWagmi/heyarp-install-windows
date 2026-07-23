@@ -9,7 +9,7 @@ const {
   buildPrompt,
   resolveClaude,
   validateClaudeCandidate,
-} = require('./arp-worker-run-claude');
+} = require('../worker/arp-worker-run-claude');
 
 test('Claude Code worker prompt uses the v4 primary delegation flow', () => {
   const prompt = buildPrompt({
