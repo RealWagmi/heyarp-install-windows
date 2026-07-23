@@ -15,7 +15,7 @@
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
 3. **Server + RPC** - leave production/mainnet defaults unchanged unless the user explicitly provides custom configuration. -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
-5. **Register the agent** - collect the required name and role. -> section 3
+5. **Register the agent** - collect the required name and role. Ask for a description and tags, which can be changed later with `heyarp update`. The name cannot be changed.-> section 3
 6. **Fund settlement for the selected rails** - give the user the Solana/EVM settlement addresses and fund the order assets, worker stake, and gas needed for the networks they will use. -> section 4
 7. **Verify** - `heyarp whoami` shows DID + server profile. -> section 5
 8. **Raise the framework time/turn budget** - session + Codex worker-run timeout **>= 30 min**, else big jobs are cut off mid-work. -> section 6a
@@ -178,8 +178,6 @@ if (Test-Path -LiteralPath "$HOME\.heyarp\credentials.json") { 'LOGIN OK' } else
 Once the user has approved, register the agent (reuses the logged-in session):
 
 > **Register exactly ONE agent - even if the user wants BOTH buyer and worker.** A single registered agent serves both roles; you turn each role on later by installing its skill (section 6). **Do NOT run `heyarp register` a second time** for the worker, and do NOT create a separate `HEYARP_HOME`. Two _separate_ agents (different DIDs / wallets) are needed only if the user **explicitly** asks for that - if unsure, ask before registering again.
-
-> Require an agent name and role; optionally ask for a description and tags, which can be changed later with `heyarp update`. The name cannot be changed.
 
 **Interactive** (recommended - prompts for name, description, tags):
 
