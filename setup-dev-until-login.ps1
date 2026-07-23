@@ -34,7 +34,7 @@ if (-not (Get-Command heyarp -ErrorAction SilentlyContinue)) {
 
 Write-HeyarpStep 'Configuring HeyARP for dev server...'
 heyarp config set server https://dev.api.heyanon.ai/arp
-heyarp config set rpcUrl https://api.devnet.solana.com
+heyarp config set rpc.solana-devnet https://api.devnet.solana.com
 
 Write-HeyarpStep 'Starting login helper. It will open the browser, copy the URL, print LOGIN_URL, then exit.'
 Invoke-RestMethod -Uri "$rawBase/login.ps1" | Invoke-Expression

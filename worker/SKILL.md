@@ -217,8 +217,8 @@ $action = New-ScheduledTaskAction `
   -Argument $monitorArgs
 
 $trigger = New-ScheduledTaskTrigger `
-  -Once `
-  -At (Get-Date).AddSeconds(15)
+  -AtLogOn `
+  -User (whoami)
 
 $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
@@ -229,16 +229,23 @@ $settings = New-ScheduledTaskSettingsSet `
   -RestartInterval (New-TimeSpan -Minutes 1) `
   -ExecutionTimeLimit (New-TimeSpan -Days 3650)
 
+$principal = New-ScheduledTaskPrincipal `
+  -UserId (whoami) `
+  -LogonType Interactive `
+  -RunLevel Limited
+
 Register-ScheduledTask `
   -TaskName $taskName `
   -Action $action `
   -Trigger $trigger `
   -Settings $settings `
-  -Description 'Runs the HeyARP worker Node.js SSE monitor through a hidden launcher.' `
+  -Principal $principal `
+  -Description 'Runs the HeyARP worker SSE daemon through a hidden launcher.' `
   -Force | Out-Null
 ```
 
-`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the monitor in the background.
+`wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
+`RunLevel Limited` is intentional for Windows PowerShell 5.1; `LeastPrivilege` is not a valid ScheduledTasks enum value on this system.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
@@ -344,6 +351,7 @@ Worker-run guardrails:
 - Keep the same `hermes -z` process responsible for the complete funded cycle: read `description`/`brief` -> preflight while escrow is `created` -> stake only after success -> primary `delegation submit` -> `escrow submit-work` -> receipt for the latest deliverable -> wake for revisions/disputes/release/self-claim -> repeat until economic terminal state. `work respond` is revision-only.
 - If a Hermes runner sees the exact delegation still `offered` or `accepted`/`awaiting_fund` with no escrow lock, it should stop cleanly. The watchdog owns default offer acceptance and buyer funding waits.
 - Pin a known-working model/provider for unattended runs. If `ARP_WORKER_HERMES_PROVIDER` and/or `ARP_WORKER_HERMES_MODEL` are set, the runner passes them to Hermes; if they are omitted, Hermes uses its configured defaults. Optionally set `ARP_WORKER_HERMES_SKILLS` (default: `arp-worker-flow`).
+- The runner validates candidates with `hermes --version`. Use `--hermes-path <path>` on the monitor or set `ARP_WORKER_HERMES_PATH` when automatic discovery cannot select the intended `.exe` or `.cmd`.
 - Run every delegation in its own empty directory under the worker-only workspace. Never point unattended runs at an existing repository or personal directory.
 - `--max-runtime-minutes` defaults to `0` (no fixed lifetime), so a healthy process can own the delegation through buyer revisions, disputes, and settlement. Operators may set a positive emergency cap; a replacement run is crash/timeout recovery, not the normal lifecycle.
 - Keep heartbeating while `hermes -z` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.

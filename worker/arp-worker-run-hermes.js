@@ -30,18 +30,92 @@ function appendLine(file, line) {
   fs.appendFileSync(file, `${line}\n`, { encoding: 'utf8' });
 }
 
-function resolveHermes() {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (localAppData) {
-    const venvPath = path.join(localAppData, 'hermes', 'hermes-agent', 'venv', 'Scripts', 'hermes.exe');
-    if (fs.existsSync(venvPath)) return venvPath;
+function buildHermesInvocation(executablePath, args = [], options = {}) {
+  const env = options.env || process.env;
+  const extension = path.extname(executablePath).toLowerCase();
+  if (extension === '.cmd') {
+    return {
+      command: env.ComSpec || env.COMSPEC || 'cmd.exe',
+      args: ['/d', '/s', '/c', executablePath, ...args],
+    };
   }
-  const result = spawnSync('where', ['hermes'], { encoding: 'utf8', windowsHide: true });
-  if (result.status === 0) {
-    const first = (result.stdout || '').split(/\r?\n/).find(Boolean);
-    if (first) return first.trim();
+  return { command: executablePath, args };
+}
+
+function validateHermesCandidate(candidate, options = {}) {
+  const env = options.env || process.env;
+  const existsSync = options.existsSync || fs.existsSync;
+  const statSync = options.statSync || fs.statSync;
+  const runSync = options.spawnSync || spawnSync;
+  const executablePath = String(candidate || '').trim();
+  if (!executablePath) return { valid: false, reason: 'empty path' };
+  if (!existsSync(executablePath)) return { valid: false, reason: 'file does not exist' };
+  try {
+    if (!statSync(executablePath).isFile()) return { valid: false, reason: 'not a file' };
+  } catch (error) {
+    return { valid: false, reason: `cannot inspect file: ${error.message}` };
   }
-  throw new Error('hermes executable not found');
+
+  const extension = path.extname(executablePath).toLowerCase();
+  if (extension !== '.exe' && extension !== '.cmd') {
+    return { valid: false, reason: `unsupported Windows file type "${extension || '<none>'}"` };
+  }
+
+  const invocation = buildHermesInvocation(executablePath, ['--version'], { env });
+  const result = runSync(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+    env,
+  });
+  if (result.error) return { valid: false, reason: `launch failed: ${result.error.message}` };
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+    return { valid: false, reason: `--version exited ${result.status}${detail ? `: ${detail}` : ''}` };
+  }
+  return { valid: true, executablePath };
+}
+
+function resolveHermes(options = {}) {
+  const env = options.env || process.env;
+  const runSync = options.spawnSync || spawnSync;
+  const validationOptions = { ...options, env, spawnSync: runSync };
+  const rejected = [];
+  const validateConfigured = (candidate, source) => {
+    const result = validateHermesCandidate(candidate, validationOptions);
+    if (!result.valid) throw new Error(`${source} is not a usable Hermes executable: ${candidate} (${result.reason})`);
+    return result.executablePath;
+  };
+
+  if (options.explicitPath) return validateConfigured(options.explicitPath, '--hermes-path');
+  if (env.ARP_WORKER_HERMES_PATH) return validateConfigured(env.ARP_WORKER_HERMES_PATH, 'ARP_WORKER_HERMES_PATH');
+
+  const candidates = [];
+  if (env.LOCALAPPDATA) {
+    candidates.push(path.join(env.LOCALAPPDATA, 'hermes', 'hermes-agent', 'venv', 'Scripts', 'hermes.exe'));
+  }
+  const whereResult = runSync('where.exe', ['hermes'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+    env,
+  });
+  if (!whereResult.error && whereResult.status === 0) {
+    candidates.push(...(whereResult.stdout || '').split(/\r?\n/).map((value) => value.trim()).filter(Boolean));
+  }
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const result = validateHermesCandidate(candidate, validationOptions);
+    if (result.valid) return result.executablePath;
+    rejected.push(`${candidate} (${result.reason})`);
+  }
+
+  const detail = rejected.length ? ` Rejected: ${rejected.join('; ')}` : '';
+  throw new Error(`hermes executable not found.${detail}`);
 }
 
 function requireArg(args, name) {
@@ -119,7 +193,7 @@ function main() {
   const stdoutLog = path.join(logsRoot, `${delegationId}.runner.stdout.log`);
   const stderrLog = path.join(logsRoot, `${delegationId}.runner.stderr.log`);
   const dispatchedFile = path.join(stateRoot, 'dispatched.txt');
-  const hermes = resolveHermes();
+  const hermes = resolveHermes({ explicitPath: args['hermes-path'] });
   const context = {
     relationshipId,
     delegationId,
@@ -156,7 +230,8 @@ function main() {
 
   const outFd = fs.openSync(stdoutLog, 'a');
   const errFd = fs.openSync(stderrLog, 'a');
-  const child = spawn(hermes, hermesArgs, {
+  const hermesInvocation = buildHermesInvocation(hermes, hermesArgs);
+  const child = spawn(hermesInvocation.command, hermesInvocation.args, {
     cwd: workspace,
     windowsHide: true,
     stdio: ['ignore', outFd, errFd],
@@ -211,4 +286,9 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildPrompt };
+module.exports = {
+  buildHermesInvocation,
+  buildPrompt,
+  resolveHermes,
+  validateHermesCandidate,
+};
