@@ -8,7 +8,7 @@ const {
   buildPrompt,
   resolveHermes,
   validateHermesCandidate,
-} = require('./arp-worker-run-hermes');
+} = require('../worker/arp-worker-run-hermes');
 
 test('Hermes worker prompt uses the v4 primary delegation flow', () => {
   const prompt = buildPrompt({
