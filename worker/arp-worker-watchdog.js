@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
-// Read simple --key value command-line arguments.
+// Read simple --key value command-line arguments. Repeated options are kept
+// as arrays so one worker can publish and enforce more than one exact price.
 // Task Scheduler passes options this way, for example:
 //   node arp-worker-watchdog.js --workspace C:\path\to\workspace
 function parseArgs(argv) {
@@ -18,7 +19,9 @@ function parseArgs(argv) {
     if (!next || next.startsWith('--')) {
       out[key] = true;
     } else {
-      out[key] = next;
+      if (out[key] === undefined) out[key] = next;
+      else if (Array.isArray(out[key])) out[key].push(next);
+      else out[key] = [out[key], next];
       i += 1;
     }
   }
@@ -197,7 +200,7 @@ function killRelatedDelegationProcesses(delegationId, log, reason) {
       "  $_.Name -ne 'powershell.exe' -and",
       '  $_.CommandLine -and',
       '  $_.CommandLine.Contains($needle) -and',
-      '  ($_.CommandLine.Contains("heyarp") -or $_.CommandLine.Contains("arp-worker-run-openclaw.js") -or $_.CommandLine.Contains("openclaw"))',
+      '  ($_.CommandLine.Contains("heyarp") -or $_.CommandLine.Contains("arp-worker-run-openclaw.js") -or $_.CommandLine.Contains("openclaw.exe") -or $_.CommandLine.Contains("openclaw.cmd") -or $_.CommandLine.Contains("openclaw.mjs"))',
       '} | Select-Object ProcessId,Name,CommandLine | ConvertTo-Json -Compress',
     ].join('; '),
   ];
@@ -255,7 +258,7 @@ function terminalReasonFromDelegation(record) {
   if (['paid', 'refunded'].includes(releaseStatus)) return `releaseStatus=${releaseStatus}`;
 
   const state = String(record.state || '').toLowerCase();
-  if (['cancelled', 'canceled', 'declined', 'refunded'].includes(state)) return `delegationState=${state}`;
+  if (['cancelled', 'canceled', 'declined', 'failed', 'refunded'].includes(state)) return `delegationState=${state}`;
 
   return '';
 }
@@ -263,19 +266,72 @@ function terminalReasonFromDelegation(record) {
 function terminalReasonFromEscrow(record) {
   if (!record) return '';
   const state = String(record.state || record.lockState || '').toLowerCase();
-  if (['paid', 'refunded', 'cancelled', 'canceled', 'revoked'].includes(state)) return `escrowState=${state}`;
+  if (['paid', 'refunded', 'cancelled', 'canceled', 'revoked', 'dispute_resolved', 'dispute_closed'].includes(state)) {
+    return `escrowState=${state}`;
+  }
   return '';
 }
 
+const EVM_NETWORK_BY_CAIP2 = {
+  'eip155:4663': 'robinhood-mainnet',
+  'eip155:46630': 'robinhood-testnet',
+};
+
+function settlementAssetId(record) {
+  return firstPresent([
+    record?.assetId,
+    record?.asset_id,
+    record?.currencyAssetId,
+    record?.currency_asset_id,
+    record?.currency?.assetId,
+    record?.currency?.asset_id,
+  ]);
+}
+
+function settlementNetwork(record) {
+  const explicit = firstPresent([
+    record?.network,
+    record?.settlementNetwork,
+    record?.currencyNetwork,
+    record?.currency?.network,
+    record?.escrowLock?.network,
+    record?.attachments?.escrow_lock?.network,
+  ]);
+  if (explicit) return String(explicit).trim().toLowerCase();
+
+  const assetId = String(settlementAssetId(record) || '').trim().toLowerCase();
+  const slash = assetId.indexOf('/');
+  const caip2 = slash >= 0 ? assetId.slice(0, slash) : assetId;
+  return EVM_NETWORK_BY_CAIP2[caip2] || '';
+}
+
+function buildEscrowShowArgs(delegationId, record) {
+  const assetId = String(settlementAssetId(record) || '').trim().toLowerCase();
+  const explicitNetwork = settlementNetwork(record);
+  const isEvm = assetId.startsWith('eip155:') || explicitNetwork.startsWith('robinhood-');
+  if (isEvm && !explicitNetwork) return null;
+
+  const args = ['escrow', 'show', delegationId];
+  if (isEvm) args.push('--network', explicitNetwork);
+  args.push('--json');
+  return args;
+}
+
 function getEconomicTerminalReason(delegationId, relationshipId, fromDid, log) {
+  let delegation;
   if (relationshipId) {
     const delegations = runHeyarpJson(withFromDid(['delegations', relationshipId, '--json'], fromDid), log, `delegation terminal read ${delegationId}`);
-    const delegation = delegations.find((item) => item && item.delegationId === delegationId);
+    delegation = delegations.find((item) => item && item.delegationId === delegationId);
     const reason = terminalReasonFromDelegation(delegation);
     if (reason) return reason;
   }
 
-  const escrowRows = runHeyarpJson(withFromDid(['escrow', 'show', delegationId, '--json'], fromDid), log, `escrow terminal read ${delegationId}`);
+  const showArgs = buildEscrowShowArgs(delegationId, delegation);
+  if (!showArgs) {
+    log(`escrow terminal read ${delegationId} skipped: EVM settlement network could not be resolved; keep runner fail-closed`);
+    return '';
+  }
+  const escrowRows = runHeyarpJson(withFromDid(showArgs, fromDid), log, `escrow terminal read ${delegationId}`);
   const escrow = escrowRows[0];
   return terminalReasonFromEscrow(escrow);
 }
@@ -362,6 +418,17 @@ function taskOfferAmount(task) {
 
 function taskCurrencyValues(task) {
   const currency = task.currency || task.offerCurrency || task.delegation?.currency || task.terms?.currency || {};
+  const network = firstPresent([
+    task.network,
+    task.settlementNetwork,
+    task.currencyNetwork,
+    currency.network,
+  ]);
+  const symbol = firstPresent([
+    task.asset,
+    task.currencySymbol,
+    currency.symbol,
+  ]);
   return [
     task.asset,
     task.assetId,
@@ -376,14 +443,39 @@ function taskCurrencyValues(task) {
     currency.assetId,
     currency.asset_id,
     currency.id,
+    symbol && network ? `${symbol}:${network}` : '',
   ].filter((value) => value !== undefined && value !== null && String(value).trim() !== '');
 }
 
-function readAcceptPolicy(args) {
-  return {
+function hasPrimaryRefusal(paths, delegationId) {
+  return fs.existsSync(path.join(paths.logsRoot, `${delegationId}.refusal.txt`));
+}
+
+function parseAcceptPolicy(value) {
+  const text = String(value || '').trim();
+  const separator = text.lastIndexOf(',');
+  if (separator <= 0 || separator === text.length - 1) {
+    throw new Error(`invalid --accept-policy '${text}'; expected <asset-id>,<amount>`);
+  }
+  const asset = text.slice(0, separator).trim().toUpperCase();
+  const amount = normalizeDecimal(text.slice(separator + 1));
+  if (!asset || !amount || compareDecimal(amount, '0') !== 1) {
+    throw new Error(`invalid --accept-policy '${text}'; asset and positive decimal amount are required`);
+  }
+  return { asset, amount };
+}
+
+function readAcceptPolicies(args) {
+  const configured = args['accept-policy'];
+  const values = configured === undefined ? [] : (Array.isArray(configured) ? configured : [configured]);
+  if (values.length > 0) return values.map(parseAcceptPolicy);
+
+  // Backward compatibility for existing scheduled tasks.
+  return [{
     amount: normalizeDecimal(args['accept-amount'] || process.env.ARP_WORKER_ACCEPT_AMOUNT || '0.1') || '0.1',
-    asset: String(args['accept-asset'] || process.env.ARP_WORKER_ACCEPT_ASSET || 'SOL').trim().toUpperCase() || 'SOL',
-  };
+    asset: String(args['accept-asset'] || process.env.ARP_WORKER_ACCEPT_ASSET || 'SOL:solana-mainnet').trim().toUpperCase()
+      || 'SOL:SOLANA-MAINNET',
+  }];
 }
 
 function assetMatches(requiredAsset, offeredAssets) {
@@ -393,8 +485,6 @@ function assetMatches(requiredAsset, offeredAssets) {
     const offered = String(offeredAsset || '').trim().toUpperCase();
     if (!offered) continue;
     if (offered === required) return true;
-    if (offered.startsWith(`${required}:`)) return true;
-    if (required.startsWith(`${offered}:`)) return true;
   }
   return false;
 }
@@ -430,35 +520,66 @@ function evaluateAcceptPolicy(task, policy) {
   return { ok: true, detail: `matches exact ${policy.amount} ${policy.asset}` };
 }
 
-function hasErrorWorkResponse(relationshipId, delegationId, fromDid, log) {
-  const rows = runHeyarpJson(withFromDid(['work-list', relationshipId, '--json', '--delegation-id', delegationId], fromDid), log, `work-list read ${delegationId}`, {
-    timeoutMs: 30000,
-  });
-  return rows.some((row) => row?.delegationId === delegationId
-    && row?.state === 'responded'
-    && row?.responseError);
-}
+function evaluateAcceptPolicies(task, policies) {
+  const decisions = policies.map((policy) => evaluateAcceptPolicy(task, policy));
+  const accepted = decisions.find((decision) => decision.ok);
+  if (accepted) return accepted;
 
-function stopErrorResponseRunner(paths, delegationId, log) {
-  const lockFile = path.join(paths.runsRoot, `${delegationId}.lock`);
-  if (!fs.existsSync(lockFile)) return;
+  const currencies = taskCurrencyValues(task).map((value) => String(value).trim().toUpperCase());
+  const matchingAssetIndex = policies.findIndex((policy) => assetMatches(policy.asset, currencies));
+  if (matchingAssetIndex >= 0) return decisions[matchingAssetIndex];
 
-  const lock = readLock(lockFile);
-  const pid = Number(lock.fields && lock.fields.pid);
-  if (pid && isActiveWorker(lockFile, delegationId)) {
-    killProcessTree(pid, log, `${delegationId}:error_response`);
-    killRelatedDelegationProcesses(delegationId, log, `${delegationId}:error_response`);
-  }
-  fs.rmSync(lockFile, { force: true });
-  log(`removed refused runner lock delegation=${delegationId} pid=${pid || ''}`);
+  return {
+    ok: false,
+    reason: 'policy',
+    detail: `offer asset ${currencies.join('/') || '<missing>'} does not match an accepted exact policy`,
+  };
 }
 
 function isWaitingForCounterpartyOrChain(task) {
   const phase = String(task.phase || '').toLowerCase();
   const state = String(task.state || '').toLowerCase();
   if (task.nextActionOwner && task.nextActionOwner !== 'me') return true;
-  return ['awaiting_fund', 'awaiting_lock', 'awaiting_work_request'].includes(phase)
+  return ['awaiting_fund', 'awaiting_lock'].includes(phase)
     || ['accepted', 'pending_lock_finalization'].includes(state);
+}
+
+function classifyFundedState(delegation, escrow) {
+  const delegationState = String(delegation?.state || '').toLowerCase();
+  const escrowState = String(escrow?.state || escrow?.lockState || '').toLowerCase();
+  const terminalDelegationStates = new Set(['cancelled', 'canceled', 'declined', 'failed', 'refunded']);
+  const terminalEscrowStates = new Set(['paid', 'refunded', 'cancelled', 'canceled', 'revoked', 'dispute_resolved', 'dispute_closed']);
+  const actionableEscrowStates = new Set(['created', 'in_progress', 'submitted', 'disputing']);
+
+  if (!delegation) return { actionable: false, reason: 'delegation-read-missing' };
+  if (terminalDelegationStates.has(delegationState)) return { actionable: false, terminal: true, reason: `delegation-${delegationState}` };
+  if (!escrow) return { actionable: false, reason: 'escrow-read-missing' };
+  if (terminalEscrowStates.has(escrowState)) return { actionable: false, terminal: true, reason: `escrow-${escrowState}` };
+  if (!['locked', 'submitted', 'completed', 'disputing'].includes(delegationState)) {
+    return { actionable: false, reason: `delegation-${delegationState || 'unknown'}-not-funded` };
+  }
+  if (!actionableEscrowStates.has(escrowState)) return { actionable: false, reason: `escrow-${escrowState || 'unknown'}-not-actionable` };
+  return { actionable: true, escrowState, reason: `funded-${escrowState}` };
+}
+
+function readFundedState(relationshipId, delegationId, fromDid, log, task) {
+  const delegations = runHeyarpJson(
+    withFromDid(['delegations', relationshipId, '--json'], fromDid),
+    log,
+    `funding delegation read ${delegationId}`,
+    { timeoutMs: 30000 },
+  );
+  const delegation = delegations.find((row) => row?.delegationId === delegationId);
+  const settlement = delegation || task;
+  const showArgs = buildEscrowShowArgs(delegationId, settlement);
+  if (!showArgs) return { actionable: false, reason: 'evm-network-unresolved' };
+  const escrowRows = runHeyarpJson(
+    withFromDid(showArgs, fromDid),
+    log,
+    `funding escrow read ${delegationId}`,
+    { timeoutMs: 30000 },
+  );
+  return classifyFundedState(delegation, escrowRows[0]);
 }
 
 function isWorkerLine(line) {
@@ -485,6 +606,8 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   if (context.eventId) workerArgs.push('--event-id', context.eventId);
   if (context.requestId) workerArgs.push('--request-id', context.requestId);
   if (context.fromDid) workerArgs.push('--from-did', context.fromDid);
+  if (context.openclawPath) workerArgs.push('--openclaw-path', context.openclawPath);
+  if (context.maxRuntimeMinutes !== undefined) workerArgs.push('--max-runtime-minutes', String(context.maxRuntimeMinutes));
   return workerArgs;
 }
 
@@ -567,7 +690,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // STALL starts a replacement worker, ACCEPT accepts a policy-matching offer, DECLINE
 // rejects a non-matching offer, and NEW
 // either accepts a handshake inline or starts a funded/executable worker run.
-function handleLine(line, paths, workspace, log, fromDid) {
+function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -576,6 +699,8 @@ function handleLine(line, paths, workspace, log, fromDid) {
       relationshipId: parts[1],
       delegationId: parts[2],
       fromDid,
+      openclawPath,
+      maxRuntimeMinutes,
     }, paths, workspace, log);
   }
 
@@ -623,10 +748,12 @@ function handleLine(line, paths, workspace, log, fromDid) {
     delegationId: parts[5],
     requestId: parts[6],
     fromDid,
+    openclawPath,
+    maxRuntimeMinutes,
   };
 
   if (context.type === 'handshake') {
-    // Handshakes are cheap and do not need a OpenClaw worker run.
+    // Handshakes are cheap and do not need an OpenClaw worker run.
     const result = runShell('heyarp', withFromDid([
       'send-handshake-response',
       context.senderDid,
@@ -654,15 +781,18 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   const workspace = path.resolve(args.workspace || process.cwd());
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
-  const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 3);
+  const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 1);
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
-  const acceptPolicy = readAcceptPolicy(args);
+  if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
+  const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 0);
+  const openclawPath = args['openclaw-path'] || '';
+  const acceptPolicies = readAcceptPolicies(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
 
   withMonitorLock(paths, () => {
-    log(`accept policy exact_amount=${acceptPolicy.amount} asset=${acceptPolicy.asset}`);
+    log(`accept policies ${acceptPolicies.map((policy) => `exact_amount=${policy.amount} asset=${policy.asset}`).join('; ')}`);
     // seen.txt prevents processing the same inbox event twice.
     // dispatched.txt tells us which active tasks already have a worker run.
     const seen = new Set(readLines(paths.seenFile));
@@ -697,6 +827,9 @@ function main() {
     const tasks = runHeyarpJson(withFromDid(['tasks', '--next', '--json'], fromDid), log, 'tasks read', {
       timeoutMs: 30000,
     });
+    const disputeTasks = runHeyarpJson(withFromDid(['tasks', '--state', 'disputing', '--json'], fromDid), log, 'dispute recovery tasks read', {
+      timeoutMs: 30000,
+    });
     cleanupTerminalActiveLocks(paths, fromDid, log);
     const now = Math.floor(Date.now() / 1000);
     const stallSeconds = stallMinutes * 60;
@@ -706,7 +839,7 @@ function main() {
       if (!delegationId || !relationshipId || queuedDelegations.has(delegationId)) continue;
 
       if (isAwaitingAcceptance(task)) {
-        const decision = evaluateAcceptPolicy(task, acceptPolicy);
+        const decision = evaluateAcceptPolicies(task, acceptPolicies);
         if (decision.ok) {
           pushLine(['ACCEPT', relationshipId, delegationId, task.state || task.phase || 'offered']);
         } else {
@@ -720,9 +853,14 @@ function main() {
         continue;
       }
 
-      if (hasErrorWorkResponse(relationshipId, delegationId, fromDid, log)) {
-        stopErrorResponseRunner(paths, delegationId, log);
-        log(`skip delegation=${delegationId}; work-list already has error/refusal response`);
+      const funded = readFundedState(relationshipId, delegationId, fromDid, log, task);
+      if (!funded.actionable) {
+        log(`wait delegation=${delegationId}; funded_check=${funded.reason}; no OpenClaw runner`);
+        continue;
+      }
+
+      if (funded.escrowState === 'created' && hasPrimaryRefusal(paths, delegationId)) {
+        log(`wait delegation=${delegationId}; primary preflight refusal is recorded; no OpenClaw redispatch while buyer cancellation is pending`);
         continue;
       }
 
@@ -749,6 +887,44 @@ function main() {
       }
     }
 
+    // `tasks --next` intentionally excludes disputes because neither party is
+    // the action owner while the arbiter is deciding. Read them separately so
+    // a reboot or crashed runner can restore monitoring without treating the
+    // dispute as ordinary new delivery work.
+    for (const task of disputeTasks) {
+      const delegationId = task.delegationId || '';
+      const relationshipId = task.relationshipId || '';
+      if (!delegationId || !relationshipId || queuedDelegations.has(delegationId)) continue;
+
+      const funded = readFundedState(relationshipId, delegationId, fromDid, log, task);
+      if (!funded.actionable || funded.escrowState !== 'disputing') {
+        log(`dispute recovery wait delegation=${delegationId}; funded_check=${funded.reason}; escrow=${funded.escrowState || 'unknown'}; no OpenClaw runner`);
+        continue;
+      }
+
+      if (dispatched.has(delegationId)) {
+        const age = now - dispatched.get(delegationId);
+        if (age <= stallSeconds) continue;
+        const lockFile = path.join(paths.runsRoot, `${delegationId}.lock`);
+        if (isActiveWorker(lockFile, delegationId)) {
+          log(`dispute heartbeat stale for ${delegationId} age_min=${Math.floor(age / 60)} but runner process is alive; skip recovery`);
+        } else {
+          pushLine(['STALL', relationshipId, delegationId, 'dispute-monitoring', Math.floor(age / 60)]);
+        }
+        continue;
+      }
+
+      pushLine([
+        'NEW',
+        relationshipId,
+        'dispute-monitoring',
+        '',
+        task.offererDid || '',
+        delegationId,
+        '',
+      ]);
+    }
+
     // Idle is the expected common case. Log it and stop.
     if (!lines.length) {
       log('idle');
@@ -766,14 +942,14 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log, fromDid);
+        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath);
         if (started) activeJobs += 1;
       }
     }
   });
 }
 
-try {
+if (require.main === module) try {
   main();
 } catch (error) {
   // Last-resort logging. Task Scheduler does not show an interactive error,
@@ -788,3 +964,17 @@ try {
   }
   process.exitCode = 1;
 }
+
+module.exports = {
+  assetMatches,
+  buildEscrowShowArgs,
+  buildWorkerArgs,
+  classifyFundedState,
+  compareDecimal,
+  evaluateAcceptPolicies,
+  evaluateAcceptPolicy,
+  hasPrimaryRefusal,
+  isWaitingForCounterpartyOrChain,
+  normalizeDecimal,
+  taskCurrencyValues,
+};

@@ -1,0 +1,126 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  assetMatches,
+  buildEscrowShowArgs,
+  buildWorkerArgs,
+  classifyFundedState,
+  evaluateAcceptPolicies,
+  evaluateAcceptPolicy,
+  hasPrimaryRefusal,
+  isWaitingForCounterpartyOrChain,
+  taskCurrencyValues,
+} = require('./arp-worker-watchdog.js');
+
+test('worker runner arguments preserve the explicit OpenClaw executable path', () => {
+  const args = buildWorkerArgs({
+    relationshipId: 'rel-1',
+    delegationId: 'del-1',
+    fromDid: 'did:arp:worker',
+    openclawPath: 'C:\\Tools\\openclaw.cmd',
+    maxRuntimeMinutes: 0,
+  }, {
+    stateRoot: 'C:\\state',
+  }, 'C:\\workspace', 'C:\\skill\\arp-worker-run-openclaw.js');
+
+  assert.deepEqual(args, [
+    'C:\\skill\\arp-worker-run-openclaw.js',
+    '--workspace', 'C:\\workspace',
+    '--relationship-id', 'rel-1',
+    '--delegation-id', 'del-1',
+    '--state-root', 'C:\\state',
+    '--from-did', 'did:arp:worker',
+    '--openclaw-path', 'C:\\Tools\\openclaw.cmd',
+    '--max-runtime-minutes', '0',
+  ]);
+});
+
+test('unfunded delegations are never actionable', () => {
+  assert.equal(classifyFundedState({ state: 'accepted' }, null).actionable, false);
+  assert.equal(classifyFundedState({ state: 'accepted' }, { state: 'created' }).actionable, false);
+  assert.equal(classifyFundedState({ state: 'offered' }, { state: 'created' }).actionable, false);
+});
+
+test('funded v4 primary and recovery states are actionable', () => {
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'created' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'in_progress' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'submitted' }, { state: 'in_progress' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'completed' }, { state: 'submitted' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'disputing' }).actionable, true);
+  assert.equal(classifyFundedState({ state: 'disputing' }, { state: 'disputing' }).actionable, true);
+});
+
+test('unknown and terminal escrow states fail closed', () => {
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'mystery' }).actionable, false);
+  assert.equal(classifyFundedState({ state: 'failed' }, { state: 'created' }).actionable, false);
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'paid' }).actionable, false);
+  assert.equal(classifyFundedState({ state: 'locked' }, { state: 'dispute_closed' }).actionable, false);
+});
+
+test('primary flow does not wait for an initial work request', () => {
+  assert.equal(isWaitingForCounterpartyOrChain({ phase: 'awaiting_work_request', state: 'locked', nextActionOwner: 'me' }), false);
+  assert.equal(isWaitingForCounterpartyOrChain({ phase: 'awaiting_fund', state: 'accepted', nextActionOwner: 'buyer' }), true);
+});
+
+test('asset policy is exact and network-specific', () => {
+  assert.equal(assetMatches('SOL:SOLANA-MAINNET', ['SOL:solana-mainnet']), true);
+  assert.equal(assetMatches('SOL:SOLANA-MAINNET', ['SOL:solana-devnet', 'SOL']), false);
+  assert.equal(assetMatches('USDC:ROBINHOOD-TESTNET', ['USDC:solana-mainnet']), false);
+});
+
+test('currency candidates include a network-qualified symbol', () => {
+  const values = taskCurrencyValues({ currency: { symbol: 'ETH', network: 'robinhood-testnet' } });
+  assert.ok(values.includes('ETH:robinhood-testnet'));
+});
+
+test('accept policy requires exact amount and asset', () => {
+  const policy = { amount: '0.1', asset: 'SOL:SOLANA-MAINNET' };
+  assert.equal(evaluateAcceptPolicy({ amount: '0.10', currency: 'SOL:solana-mainnet' }, policy).ok, true);
+  assert.equal(evaluateAcceptPolicy({ amount: '0.1', currency: 'SOL:solana-devnet' }, policy).ok, false);
+  assert.equal(evaluateAcceptPolicy({ amount: '0.2', currency: 'SOL:solana-mainnet' }, policy).ok, false);
+});
+
+test('escrow show selects EVM mode from the canonical asset id', () => {
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-1', { currency: { assetId: 'eip155:46630/slip44:60' } }),
+    ['escrow', 'show', 'delegation-1', '--network', 'robinhood-testnet', '--json'],
+  );
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-2', { currency: { assetId: 'eip155:4663/slip44:60' } }),
+    ['escrow', 'show', 'delegation-2', '--network', 'robinhood-mainnet', '--json'],
+  );
+  assert.deepEqual(
+    buildEscrowShowArgs('delegation-3', { currency: { assetId: 'solana:mainnet/slip44:501' } }),
+    ['escrow', 'show', 'delegation-3', '--json'],
+  );
+  assert.equal(buildEscrowShowArgs('delegation-4', { currency: { assetId: 'eip155:999/slip44:60' } }), null);
+});
+
+test('multiple accept policies allow different exact prices per asset', () => {
+  const policies = [
+    { amount: '0.1', asset: 'SOLANA:MAINNET/SLIP44:501' },
+    { amount: '0.005', asset: 'EIP155:46630/SLIP44:60' },
+  ];
+  assert.equal(evaluateAcceptPolicies({ amount: '0.1', currency: { assetId: 'solana:mainnet/slip44:501' } }, policies).ok, true);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.005', currency: { assetId: 'eip155:46630/slip44:60' } }, policies).ok, true);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.1', currency: { assetId: 'eip155:46630/slip44:60' } }, policies).ok, false);
+  assert.equal(evaluateAcceptPolicies({ amount: '0.005', currency: { assetId: 'solana:mainnet/slip44:501' } }, policies).ok, false);
+});
+
+test('primary refusal marker suppresses funded redispatch', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arp-watchdog-test-'));
+  const paths = { logsRoot: root };
+  const delegationId = '00000000-0000-4000-8000-000000000001';
+  assert.equal(hasPrimaryRefusal(paths, delegationId), false);
+  const refusalFile = path.join(root, `${delegationId}.refusal.txt`);
+  fs.writeFileSync(refusalFile, 'policy refusal', 'utf8');
+  assert.equal(hasPrimaryRefusal(paths, delegationId), true);
+  fs.unlinkSync(refusalFile);
+  fs.rmdirSync(root);
+});

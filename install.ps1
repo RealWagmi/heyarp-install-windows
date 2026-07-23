@@ -179,6 +179,10 @@ if ($SkipOpengrepInstall) {
             Write-HeyarpWarn 'opengrep install did not complete. L0/L4 still work; L2 stays unavailable until you run: heyshield install-opengrep'
         }
     } else {
+        if ($RequireOpengrep) {
+            Write-HeyarpError 'Could not locate @heyanon-arp/shield and HEYSHIELD_REQUIRE_OPENGREP=1.'
+            exit 1
+        }
         Write-HeyarpWarn 'Could not locate @heyanon-arp/shield to install opengrep. Run heyshield install-opengrep once heyarp is on PATH.'
     }
 }
@@ -191,8 +195,8 @@ Write-HeyarpInfo 'NEXT - DO NOT STOP HERE. Proceed straight to SETUP NOW, in thi
 Write-HeyarpInfo '  Open the ONBOARDING GUIDE and execute Part 1 (SETUP) step by step.'
 Write-HeyarpInfo "    $GuideUrl"
 Write-HeyarpInfo ''
-Write-HeyarpInfo '  Ask the user ONLY what the guide explicitly requires: the agent NAME'
-Write-HeyarpInfo '  and funding the settlement wallet. Everything else is defined in the guide.'
+Write-HeyarpInfo '  Ask for the required agent NAME and ROLE, optional DESCRIPTION and TAGS,'
+Write-HeyarpInfo '  and funding for the selected settlement rails. Follow the guide for everything else.'
 Write-HeyarpInfo ''
 Write-HeyarpInfo 'If opengrep (L2) is missing later, run: heyshield install-opengrep'
 Write-HeyarpInfo '================================================================'
