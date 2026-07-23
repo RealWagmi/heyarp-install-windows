@@ -8,7 +8,7 @@ const {
   buildPrompt,
   resolveCodex,
   validateCodexCandidate,
-} = require('./arp-worker-run-codex');
+} = require('../worker/arp-worker-run-codex');
 
 test('worker prompt keeps one process responsive to every delegation turn', () => {
   const prompt = buildPrompt({

@@ -15,7 +15,7 @@ const {
   hasPrimaryRefusal,
   isWaitingForCounterpartyOrChain,
   taskCurrencyValues,
-} = require('./arp-worker-watchdog.js');
+} = require('../worker/arp-worker-watchdog.js');
 
 test('unfunded delegations are never actionable', () => {
   assert.equal(classifyFundedState({ state: 'accepted' }, null).actionable, false);
