@@ -297,7 +297,7 @@ if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
 }
 ```
 
-`selftest` itself exits nonzero only for definite failures; warnings and unknown results are advisories. The stricter block above requires every Windows worker check to pass before onboarding is reported complete. Keep per-network RPCs in `rpc.<network>` configuration; do not pass one shared `--rpc-url` when both Solana and EVM are active.
+`selftest` itself exits nonzero only for definite failures; warnings and unknown results are advisories. The stricter block above requires every Windows worker check to pass before onboarding is reported complete. Onboarding/selftest should verify the required RPC before enabling the worker. Keep per-network RPCs in `rpc.<network>` configuration; do not pass one shared `--rpc-url` when both Solana and EVM are active.
 
 Remove the task:
 
