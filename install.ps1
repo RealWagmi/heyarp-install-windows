@@ -179,6 +179,10 @@ if ($SkipOpengrepInstall) {
             Write-HeyarpWarn 'opengrep install did not complete. L0/L4 still work; L2 stays unavailable until you run: heyshield install-opengrep'
         }
     } else {
+        if ($RequireOpengrep) {
+            Write-HeyarpError 'Could not locate @heyanon-arp/shield and HEYSHIELD_REQUIRE_OPENGREP=1.'
+            exit 1
+        }
         Write-HeyarpWarn 'Could not locate @heyanon-arp/shield to install opengrep. Run heyshield install-opengrep once heyarp is on PATH.'
     }
 }

@@ -15,7 +15,9 @@ function parseArgs(argv) {
     if (!next || next.startsWith('--')) {
       out[key] = true;
     } else {
-      out[key] = next;
+      if (out[key] === undefined) out[key] = next;
+      else if (Array.isArray(out[key])) out[key].push(next);
+      else out[key] = [out[key], next];
       i += 1;
     }
   }
@@ -58,6 +60,11 @@ function runWatchdog(args, log, reason) {
   if (args['max-jobs']) watchdogArgs.push('--max-jobs', args['max-jobs']);
   if (args['accept-amount']) watchdogArgs.push('--accept-amount', args['accept-amount']);
   if (args['accept-asset']) watchdogArgs.push('--accept-asset', args['accept-asset']);
+  const acceptPolicies = args['accept-policy'] === undefined
+    ? []
+    : (Array.isArray(args['accept-policy']) ? args['accept-policy'] : [args['accept-policy']]);
+  for (const policy of acceptPolicies) watchdogArgs.push('--accept-policy', policy);
+  if (args['max-runtime-minutes']) watchdogArgs.push('--max-runtime-minutes', args['max-runtime-minutes']);
 
   const started = Date.now();
   const result = spawnSync(process.execPath, watchdogArgs, {
@@ -124,7 +131,12 @@ function main() {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (activeTimer) clearInterval(activeTimer);
     if (keepAlive) clearInterval(keepAlive);
-    if (tail) tail.kill();
+    if (tail?.pid) {
+      spawnSync('taskkill.exe', ['/PID', String(tail.pid), '/T', '/F'], {
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+    }
     setTimeout(() => process.exit(0), 250).unref();
   };
 
