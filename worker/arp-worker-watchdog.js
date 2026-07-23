@@ -353,6 +353,7 @@ function cleanupTerminalActiveLocks(paths, fromDid, log) {
     killProcessTree(pid, log, `${delegationId}:${reason}`);
     killRelatedDelegationProcesses(delegationId, log, `${delegationId}:${reason}`);
     fs.rmSync(lockFile, { force: true });
+    fs.rmSync(path.join(paths.runsRoot, `${delegationId}.agent`), { force: true });
     log(`removed terminal runner lock delegation=${delegationId} pid=${pid} reason=${reason}`);
   }
 }
@@ -369,6 +370,58 @@ function countActiveJobs(paths) {
     if (isActiveWorker(lockFile, delegationId)) count += 1;
   }
   return count;
+}
+
+function readOpenClawAgentIds(args, maxJobs) {
+  if (maxJobs === 0) return [];
+  const configured = args['openclaw-agent'];
+  const values = configured === undefined ? [] : (Array.isArray(configured) ? configured : [configured]);
+  const ids = [];
+  const seen = new Set();
+  for (const value of values) {
+    const id = String(value || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
+      throw new Error(`invalid --openclaw-agent "${value}"; use a lowercase OpenClaw agent id`);
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length < maxJobs) {
+    throw new Error(`configured ${ids.length} OpenClaw worker agent slot(s), but --max-jobs is ${maxJobs}; run worker onboarding again`);
+  }
+  return ids.slice(0, maxJobs);
+}
+
+function activeOpenClawAgentIds(paths) {
+  const active = new Set();
+  if (!fs.existsSync(paths.runsRoot)) return active;
+  for (const entry of fs.readdirSync(paths.runsRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.lock')) continue;
+    const delegationId = entry.name.slice(0, -'.lock'.length);
+    const lockFile = path.join(paths.runsRoot, entry.name);
+    if (!isActiveWorker(lockFile, delegationId)) continue;
+    const lock = readLock(lockFile);
+    const agentId = String(lock.fields?.openclawAgent || '').trim().toLowerCase();
+    if (agentId) active.add(agentId);
+  }
+  return active;
+}
+
+function selectAvailableOpenClawAgent(paths, configuredAgentIds, preferredAgentId = '') {
+  const active = activeOpenClawAgentIds(paths);
+  const preferred = String(preferredAgentId || '').trim().toLowerCase();
+  if (preferred && configuredAgentIds.includes(preferred) && !active.has(preferred)) return preferred;
+  return configuredAgentIds.find((agentId) => !active.has(agentId)) || '';
+}
+
+function openClawAgentWorkspace(workspaceRoot, agentId) {
+  const root = path.resolve(workspaceRoot);
+  const workspace = path.resolve(root, agentId);
+  if (path.dirname(workspace).toLowerCase() !== root.toLowerCase()) {
+    throw new Error(`OpenClaw agent workspace escaped the worker root: ${workspace}`);
+  }
+  return workspace;
 }
 
 function isAwaitingAcceptance(task) {
@@ -598,6 +651,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   const workerArgs = [
     runnerPath,
     '--workspace', workspace,
+    '--openclaw-agent', context.openclawAgent,
     '--relationship-id', context.relationshipId,
     '--delegation-id', context.delegationId,
     '--state-root', paths.stateRoot,
@@ -622,6 +676,7 @@ function startWorkerRun(context, paths, workspace, log) {
   if (!fs.existsSync(runnerPath)) throw new Error(`runner script missing at ${runnerPath}`);
 
   const lockFile = path.join(paths.runsRoot, `${context.delegationId}.lock`);
+  const agentAssignmentFile = path.join(paths.runsRoot, `${context.delegationId}.agent`);
   const dispatchLog = path.join(paths.logsRoot, `${context.delegationId}.dispatch.log`);
   const stdoutLog = path.join(paths.logsRoot, `${context.delegationId}.runner.stdout.log`);
   const stderrLog = path.join(paths.logsRoot, `${context.delegationId}.runner.stderr.log`);
@@ -643,18 +698,28 @@ function startWorkerRun(context, paths, workspace, log) {
     fs.rmSync(lockFile, { force: true });
   }
 
+  const preferredOpenClawAgent = fs.existsSync(agentAssignmentFile)
+    ? fs.readFileSync(agentAssignmentFile, 'utf8').trim().toLowerCase()
+    : '';
+  const openclawAgent = selectAvailableOpenClawAgent(paths, context.openclawAgents, preferredOpenClawAgent);
+  if (!openclawAgent) throw new Error(`no configured OpenClaw worker agent slot is free for ${context.delegationId}`);
+  const agentWorkspace = openClawAgentWorkspace(workspace, openclawAgent);
+  ensureDir(agentWorkspace);
+  context.openclawAgent = openclawAgent;
+  fs.writeFileSync(agentAssignmentFile, `${openclawAgent}\n`, { encoding: 'utf8' });
+
   // Start the runner detached so the watchdog can exit quickly.
   // Task Scheduler should run cheap ticks, not long order lifecycles.
   const outFd = fs.openSync(stdoutLog, 'a');
   const errFd = fs.openSync(stderrLog, 'a');
-  const workerArgs = buildWorkerArgs(context, paths, workspace, runnerPath);
-  dispatch(`starting worker run relationship=${context.relationshipId} delegation=${context.delegationId} runner=${runnerPath}`);
+  const workerArgs = buildWorkerArgs(context, paths, agentWorkspace, runnerPath);
+  dispatch(`starting worker run relationship=${context.relationshipId} delegation=${context.delegationId} openclawAgent=${openclawAgent} workspace=${agentWorkspace} runner=${runnerPath}`);
 
   const child = spawn(process.execPath, workerArgs, {
     detached: true,
     stdio: ['ignore', outFd, errFd],
     windowsHide: true,
-    cwd: workspace,
+    cwd: agentWorkspace,
     env: process.env,
   });
   child.unref();
@@ -664,7 +729,7 @@ function startWorkerRun(context, paths, workspace, log) {
   // Store PID metadata so future ticks can detect whether this worker is alive.
   fs.writeFileSync(
     lockFile,
-    `pid=${child.pid} started=${new Date().toISOString()} delegation=${context.delegationId} relationship=${context.relationshipId}\n`,
+    `pid=${child.pid} started=${new Date().toISOString()} delegation=${context.delegationId} relationship=${context.relationshipId} openclawAgent=${openclawAgent}\n`,
     { encoding: 'utf8' },
   );
 
@@ -690,7 +755,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // STALL starts a replacement worker, ACCEPT accepts a policy-matching offer, DECLINE
 // rejects a non-matching offer, and NEW
 // either accepts a handshake inline or starts a funded/executable worker run.
-function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath) {
+function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath, openclawAgents) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -700,6 +765,7 @@ function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, ope
       delegationId: parts[2],
       fromDid,
       openclawPath,
+      openclawAgents,
       maxRuntimeMinutes,
     }, paths, workspace, log);
   }
@@ -749,6 +815,7 @@ function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, ope
     requestId: parts[6],
     fromDid,
     openclawPath,
+    openclawAgents,
     maxRuntimeMinutes,
   };
 
@@ -786,6 +853,7 @@ function main() {
   if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
   const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 0);
   const openclawPath = args['openclaw-path'] || '';
+  const openclawAgents = readOpenClawAgentIds(args, maxJobs);
   const acceptPolicies = readAcceptPolicies(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
@@ -942,7 +1010,7 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath);
+        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, openclawPath, openclawAgents);
         if (started) activeJobs += 1;
       }
     }
@@ -976,5 +1044,8 @@ module.exports = {
   hasPrimaryRefusal,
   isWaitingForCounterpartyOrChain,
   normalizeDecimal,
+  openClawAgentWorkspace,
+  readOpenClawAgentIds,
+  selectAvailableOpenClawAgent,
   taskCurrencyValues,
 };

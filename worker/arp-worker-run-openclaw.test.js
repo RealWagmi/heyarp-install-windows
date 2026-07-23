@@ -3,11 +3,16 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const {
   buildOpenClawArgs,
   buildOpenClawInvocation,
   buildPrompt,
+  prepareDelegationTaskWorkspace,
   resolveOpenClaw,
+  resolveOpenClawAgent,
   validateOpenClawCandidate,
 } = require('./arp-worker-run-openclaw');
 
@@ -48,6 +53,7 @@ test('worker prompt keeps one process responsive to every delegation turn', () =
 
 test('OpenClaw unattended arguments preserve session, timeout, model, and thinking settings', () => {
   assert.deepEqual(buildOpenClawArgs({
+    agentId: 'arp-worker-abcd-1',
     delegationId: 'del-1',
     prompt: 'worker prompt',
   }, {
@@ -57,11 +63,76 @@ test('OpenClaw unattended arguments preserve session, timeout, model, and thinki
     'agent',
     '--local',
     '--timeout', '0',
-    '--session-key', 'agent:arp-worker:del-1',
+    '--agent', 'arp-worker-abcd-1',
+    '--session-key', 'agent:arp-worker-abcd-1:del-1',
     '--message', 'worker prompt',
     '--model', 'provider/test-model',
     '--thinking', 'high',
   ]);
+});
+
+test('OpenClaw agent must exist and use the expected worker workspace', () => {
+  const result = resolveOpenClawAgent(
+    'C:\\Tools\\openclaw.exe',
+    'arp-worker-abcd-1',
+    'C:\\worker\\arp-worker-abcd-1',
+    {
+      env: {},
+      spawnSync: () => ({
+        status: 0,
+        stdout: JSON.stringify([
+          {
+            id: 'arp-worker-abcd-1',
+            workspace: 'C:\\worker\\arp-worker-abcd-1',
+          },
+        ]),
+      }),
+    },
+  );
+  assert.deepEqual(result, {
+    agentId: 'arp-worker-abcd-1',
+    workspace: 'C:\\worker\\arp-worker-abcd-1',
+  });
+
+  assert.throws(() => resolveOpenClawAgent(
+    'C:\\Tools\\openclaw.exe',
+    'arp-worker-abcd-1',
+    'C:\\worker\\arp-worker-abcd-1',
+    {
+      env: {},
+      spawnSync: () => ({
+        status: 0,
+        stdout: JSON.stringify([
+          {
+            id: 'arp-worker-abcd-1',
+            workspace: 'C:\\Users\\person\\.openclaw\\workspace',
+          },
+        ]),
+      }),
+    },
+  ), /workspace is .* expected/);
+});
+
+test('delegation task workspace is cleared before an agent slot is reused', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arp-openclaw-runner-'));
+  const taskRoot = path.join(root, 'task');
+  fs.mkdirSync(taskRoot);
+  fs.writeFileSync(path.join(taskRoot, 'old-buyer-file.txt'), 'old', 'utf8');
+
+  const result = prepareDelegationTaskWorkspace(root, 'new-delegation');
+  assert.equal(result, taskRoot);
+  assert.equal(fs.existsSync(path.join(taskRoot, 'old-buyer-file.txt')), false);
+  assert.equal(fs.readFileSync(path.join(taskRoot, 'DELEGATION.txt'), 'utf8'), 'new-delegation\n');
+
+  fs.writeFileSync(path.join(taskRoot, 'recovery-file.txt'), 'keep', 'utf8');
+  prepareDelegationTaskWorkspace(root, 'new-delegation');
+  assert.equal(fs.readFileSync(path.join(taskRoot, 'recovery-file.txt'), 'utf8'), 'keep');
+
+  prepareDelegationTaskWorkspace(root, 'different-delegation');
+  assert.equal(fs.existsSync(path.join(taskRoot, 'recovery-file.txt')), false);
+  assert.equal(fs.readFileSync(path.join(taskRoot, 'DELEGATION.txt'), 'utf8'), 'different-delegation\n');
+
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('Windows cmd shim is launched through cmd.exe', () => {

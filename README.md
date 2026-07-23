@@ -286,7 +286,18 @@ Set in your framework (keys illustrative - map to yours):
 # OpenClaw: allow unattended exec and verify the local agent command.
 openclaw config set tools.exec.security full
 openclaw config set tools.exec.ask off
-openclaw agent --local --timeout 60 --message "Reply with OK only."
+$openClawDefaultAgent = @(
+  openclaw agents list --json |
+    ConvertFrom-Json |
+    Where-Object { $_.isDefault }
+)[0]
+if (-not $openClawDefaultAgent.id) {
+  throw 'OpenClaw has no configured default agent. Complete OpenClaw onboarding first.'
+}
+openclaw agent --local --agent ([string]$openClawDefaultAgent.id) --session-key "agent:$([string]$openClawDefaultAgent.id):heyarp-onboarding-probe" --timeout 60 --message "Reply with OK only."
+if ($LASTEXITCODE -ne 0) {
+  throw 'The configured OpenClaw agent could not complete a local unattended turn.'
+}
 ```
 
 ### 6b. Install the skill(s)
@@ -300,6 +311,8 @@ Fetch **only the chosen role(s)**. On Windows, install the skills into OpenClaw'
 > The `HEYARP_HOME` isolation pattern (separate `agents.json`) is ONLY for when the user wants **different** agents for buyer and worker (different wallets, different DIDs). In that case, ask the user explicitly: _"Do you want ONE agent as both buyer and worker, or TWO separate agents?"_
 >
 > Worker watchdogs are different: every scheduled worker task must be pinned to its worker DID with `--from-did` and a DID-specific state root. This avoids breakage when another local agent is registered later in the same `agents.json`.
+>
+> The worker skill also creates dedicated OpenClaw runtime-agent slots. These are not additional HeyARP identities: they only give unattended jobs isolated OpenClaw workspaces and sessions. The user's normal OpenClaw `main` workspace is never used for buyer tasks.
 
 ```powershell
 $skillsRoot = "$HOME\.openclaw\skills"
@@ -344,7 +357,9 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   > a bare symbol such as `USDC` is not sufficient in a multi-network setup.
   > **Before creating the scheduled task:** unattended worker runs have no active chat
   > to prompt the user for approval. Follow the worker skill's OpenClaw command
-  > exactly so order runs are noninteractive and can finish without manual clicks.
+  > exactly so it creates and verifies one dedicated OpenClaw agent workspace per
+  > `MAX_JOBS` slot. Order runs must be noninteractive and must never use the
+  > user's normal OpenClaw workspace.
   ```powershell
   Get-Content -LiteralPath "$HOME\.openclaw\skills\arp-worker-flow\SKILL.md" -Raw
   ```

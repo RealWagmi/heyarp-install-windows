@@ -57,6 +57,10 @@ function runWatchdog(args, log, reason) {
   if (args['state-root']) watchdogArgs.push('--state-root', args['state-root']);
   if (args['from-did']) watchdogArgs.push('--from-did', args['from-did']);
   if (args['openclaw-path']) watchdogArgs.push('--openclaw-path', args['openclaw-path']);
+  const openclawAgents = args['openclaw-agent'] === undefined
+    ? []
+    : (Array.isArray(args['openclaw-agent']) ? args['openclaw-agent'] : [args['openclaw-agent']]);
+  for (const agentId of openclawAgents) watchdogArgs.push('--openclaw-agent', agentId);
   if (args['stall-min']) watchdogArgs.push('--stall-min', args['stall-min']);
   if (args['max-jobs']) watchdogArgs.push('--max-jobs', args['max-jobs']);
   if (args['accept-amount']) watchdogArgs.push('--accept-amount', args['accept-amount']);

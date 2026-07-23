@@ -15,6 +15,9 @@ const {
   evaluateAcceptPolicy,
   hasPrimaryRefusal,
   isWaitingForCounterpartyOrChain,
+  openClawAgentWorkspace,
+  readOpenClawAgentIds,
+  selectAvailableOpenClawAgent,
   taskCurrencyValues,
 } = require('./arp-worker-watchdog.js');
 
@@ -23,6 +26,7 @@ test('worker runner arguments preserve the explicit OpenClaw executable path', (
     relationshipId: 'rel-1',
     delegationId: 'del-1',
     fromDid: 'did:arp:worker',
+    openclawAgent: 'arp-worker-abcd-1',
     openclawPath: 'C:\\Tools\\openclaw.cmd',
     maxRuntimeMinutes: 0,
   }, {
@@ -32,6 +36,7 @@ test('worker runner arguments preserve the explicit OpenClaw executable path', (
   assert.deepEqual(args, [
     'C:\\skill\\arp-worker-run-openclaw.js',
     '--workspace', 'C:\\workspace',
+    '--openclaw-agent', 'arp-worker-abcd-1',
     '--relationship-id', 'rel-1',
     '--delegation-id', 'del-1',
     '--state-root', 'C:\\state',
@@ -39,6 +44,36 @@ test('worker runner arguments preserve the explicit OpenClaw executable path', (
     '--openclaw-path', 'C:\\Tools\\openclaw.cmd',
     '--max-runtime-minutes', '0',
   ]);
+});
+
+test('OpenClaw worker slots must cover maximum job capacity', () => {
+  assert.deepEqual(readOpenClawAgentIds({
+    'openclaw-agent': ['arp-worker-abcd-1', 'arp-worker-abcd-2'],
+  }, 2), ['arp-worker-abcd-1', 'arp-worker-abcd-2']);
+  assert.throws(() => readOpenClawAgentIds({
+    'openclaw-agent': 'arp-worker-abcd-1',
+  }, 2), /configured 1 OpenClaw worker agent slot/);
+});
+
+test('watchdog selects a free isolated OpenClaw agent workspace', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'arp-watchdog-slots-'));
+  const paths = { runsRoot: path.join(root, 'runs') };
+  fs.mkdirSync(paths.runsRoot);
+
+  assert.equal(
+    selectAvailableOpenClawAgent(paths, ['arp-worker-abcd-1', 'arp-worker-abcd-2']),
+    'arp-worker-abcd-1',
+  );
+  assert.equal(
+    selectAvailableOpenClawAgent(paths, ['arp-worker-abcd-1', 'arp-worker-abcd-2'], 'arp-worker-abcd-2'),
+    'arp-worker-abcd-2',
+  );
+  assert.equal(
+    openClawAgentWorkspace(root, 'arp-worker-abcd-1'),
+    path.join(root, 'arp-worker-abcd-1'),
+  );
+
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('unfunded delegations are never actionable', () => {
