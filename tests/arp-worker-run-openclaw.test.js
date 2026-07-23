@@ -14,7 +14,7 @@ const {
   resolveOpenClaw,
   resolveOpenClawAgent,
   validateOpenClawCandidate,
-} = require('./arp-worker-run-openclaw');
+} = require('../worker/arp-worker-run-openclaw');
 
 test('OpenClaw worker prompt uses the v4 primary delegation flow', () => {
   const prompt = buildPrompt({

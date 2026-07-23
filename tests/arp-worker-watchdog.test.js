@@ -19,7 +19,7 @@ const {
   readOpenClawAgentIds,
   selectAvailableOpenClawAgent,
   taskCurrencyValues,
-} = require('./arp-worker-watchdog.js');
+} = require('../worker/arp-worker-watchdog.js');
 
 test('worker runner arguments preserve the explicit OpenClaw executable path', () => {
   const args = buildWorkerArgs({
