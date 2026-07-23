@@ -606,6 +606,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   if (context.eventId) workerArgs.push('--event-id', context.eventId);
   if (context.requestId) workerArgs.push('--request-id', context.requestId);
   if (context.fromDid) workerArgs.push('--from-did', context.fromDid);
+  if (context.codexPath) workerArgs.push('--codex-path', context.codexPath);
   if (context.maxRuntimeMinutes !== undefined) workerArgs.push('--max-runtime-minutes', String(context.maxRuntimeMinutes));
   return workerArgs;
 }
@@ -689,7 +690,7 @@ function startWorkerRun(context, paths, workspace, log) {
 // STALL starts a replacement worker, ACCEPT accepts a policy-matching offer, DECLINE
 // rejects a non-matching offer, and NEW
 // either accepts a handshake inline or starts a funded/executable worker run.
-function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes) {
+function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, codexPath) {
   const parts = line.split('\t');
   const kind = parts[0];
 
@@ -698,6 +699,7 @@ function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes) {
       relationshipId: parts[1],
       delegationId: parts[2],
       fromDid,
+      codexPath,
       maxRuntimeMinutes,
     }, paths, workspace, log);
   }
@@ -746,6 +748,7 @@ function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes) {
     delegationId: parts[5],
     requestId: parts[6],
     fromDid,
+    codexPath,
     maxRuntimeMinutes,
   };
 
@@ -782,6 +785,7 @@ function main() {
   const fromDid = args['from-did'] || process.env.ARP_WORKER_FROM_DID || '';
   if (!fromDid) throw new Error('--from-did is required for the worker watchdog');
   const maxRuntimeMinutes = parseNonNegativeNumber(args['max-runtime-minutes'] || process.env.ARP_WORKER_MAX_RUNTIME_MINUTES, 0);
+  const codexPath = args['codex-path'] || '';
   const acceptPolicies = readAcceptPolicies(args);
   const paths = getStatePaths(args);
   for (const file of [paths.seenFile, paths.dispatchedFile, paths.monitorLog]) ensureFile(file);
@@ -938,7 +942,7 @@ function main() {
           continue;
         }
         log(`handle ${line}`);
-        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes);
+        const started = handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, codexPath);
         if (started) activeJobs += 1;
       }
     }

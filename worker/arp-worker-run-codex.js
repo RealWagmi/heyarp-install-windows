@@ -30,18 +30,92 @@ function appendLine(file, line) {
   fs.appendFileSync(file, `${line}\n`, { encoding: 'utf8' });
 }
 
-function resolveCodex() {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (localAppData) {
-    const desktopPath = path.join(localAppData, 'OpenAI', 'Codex', 'bin', 'codex.exe');
-    if (fs.existsSync(desktopPath)) return desktopPath;
+function buildCodexInvocation(executablePath, args = [], options = {}) {
+  const env = options.env || process.env;
+  const extension = path.extname(executablePath).toLowerCase();
+  if (extension === '.cmd') {
+    return {
+      command: env.ComSpec || env.COMSPEC || 'cmd.exe',
+      args: ['/d', '/s', '/c', executablePath, ...args],
+    };
   }
-  const result = spawnSync('where', ['codex'], { encoding: 'utf8', windowsHide: true });
-  if (result.status === 0) {
-    const first = (result.stdout || '').split(/\r?\n/).find(Boolean);
-    if (first) return first.trim();
+  return { command: executablePath, args };
+}
+
+function validateCodexCandidate(candidate, options = {}) {
+  const env = options.env || process.env;
+  const existsSync = options.existsSync || fs.existsSync;
+  const statSync = options.statSync || fs.statSync;
+  const runSync = options.spawnSync || spawnSync;
+  const executablePath = String(candidate || '').trim();
+  if (!executablePath) return { valid: false, reason: 'empty path' };
+  if (!existsSync(executablePath)) return { valid: false, reason: 'file does not exist' };
+  try {
+    if (!statSync(executablePath).isFile()) return { valid: false, reason: 'not a file' };
+  } catch (error) {
+    return { valid: false, reason: `cannot inspect file: ${error.message}` };
   }
-  throw new Error('codex executable not found');
+
+  const extension = path.extname(executablePath).toLowerCase();
+  if (extension !== '.exe' && extension !== '.cmd') {
+    return { valid: false, reason: `unsupported Windows file type "${extension || '<none>'}"` };
+  }
+
+  const invocation = buildCodexInvocation(executablePath, ['--version'], { env });
+  const result = runSync(invocation.command, invocation.args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+    env,
+  });
+  if (result.error) return { valid: false, reason: `launch failed: ${result.error.message}` };
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim().replace(/\s+/g, ' ').slice(0, 200);
+    return { valid: false, reason: `--version exited ${result.status}${detail ? `: ${detail}` : ''}` };
+  }
+  return { valid: true, executablePath };
+}
+
+function resolveCodex(options = {}) {
+  const env = options.env || process.env;
+  const runSync = options.spawnSync || spawnSync;
+  const validationOptions = { ...options, env, spawnSync: runSync };
+  const rejected = [];
+  const validateConfigured = (candidate, source) => {
+    const result = validateCodexCandidate(candidate, validationOptions);
+    if (!result.valid) throw new Error(`${source} is not a usable Codex executable: ${candidate} (${result.reason})`);
+    return result.executablePath;
+  };
+
+  if (options.explicitPath) return validateConfigured(options.explicitPath, '--codex-path');
+  if (env.ARP_CODEX_PATH) return validateConfigured(env.ARP_CODEX_PATH, 'ARP_CODEX_PATH');
+
+  const candidates = [];
+  if (env.LOCALAPPDATA) {
+    candidates.push(path.join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin', 'codex.exe'));
+  }
+  const whereResult = runSync('where.exe', ['codex'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 10000,
+    env,
+  });
+  if (!whereResult.error && whereResult.status === 0) {
+    candidates.push(...(whereResult.stdout || '').split(/\r?\n/).map((value) => value.trim()).filter(Boolean));
+  }
+
+  const seen = new Set();
+  for (const candidate of candidates) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const result = validateCodexCandidate(candidate, validationOptions);
+    if (result.valid) return result.executablePath;
+    rejected.push(`${candidate} (${result.reason})`);
+  }
+
+  const detail = rejected.length ? ` Rejected: ${rejected.join('; ')}` : '';
+  throw new Error(`codex executable not found.${detail}`);
 }
 
 function requireArg(args, name) {
@@ -114,7 +188,7 @@ function main() {
   const finalFile = path.join(logsRoot, `${delegationId}.final.txt`);
   const runnerLog = path.join(logsRoot, `${delegationId}.runner.log`);
   const dispatchedFile = path.join(stateRoot, 'dispatched.txt');
-  const codex = resolveCodex();
+  const codex = resolveCodex({ explicitPath: args['codex-path'] });
   const context = {
     relationshipId,
     delegationId,
@@ -148,7 +222,8 @@ function main() {
     '-',
   ];
 
-  const child = spawn(codex, codexArgs, {
+  const codexInvocation = buildCodexInvocation(codex, codexArgs);
+  const child = spawn(codexInvocation.command, codexInvocation.args, {
     cwd: workspace,
     windowsHide: true,
     stdio: ['pipe', 'inherit', 'inherit'],
@@ -199,4 +274,9 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildPrompt };
+module.exports = {
+  buildCodexInvocation,
+  buildPrompt,
+  resolveCodex,
+  validateCodexCandidate,
+};

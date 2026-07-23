@@ -56,6 +56,7 @@ function runWatchdog(args, log, reason) {
   if (args.workspace) watchdogArgs.push('--workspace', path.resolve(args.workspace));
   if (args['state-root']) watchdogArgs.push('--state-root', args['state-root']);
   if (args['from-did']) watchdogArgs.push('--from-did', args['from-did']);
+  if (args['codex-path']) watchdogArgs.push('--codex-path', args['codex-path']);
   if (args['stall-min']) watchdogArgs.push('--stall-min', args['stall-min']);
   if (args['max-jobs']) watchdogArgs.push('--max-jobs', args['max-jobs']);
   if (args['accept-amount']) watchdogArgs.push('--accept-amount', args['accept-amount']);

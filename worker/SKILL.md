@@ -71,7 +71,7 @@ if ($evmRuntime.rpcSource -eq 'default') {
   heyarp config set "rpc.$evmNetwork" ([string]$evmRuntime.rpcUrl)
 }
 
-$escrowInfo = @(heyarp escrow info --json | ConvertFrom-Json)
+$escrowInfo = heyarp escrow info --json | ConvertFrom-Json
 $evmInfo = @($escrowInfo | Where-Object { $_.chain -eq 'eip155' -and $_.network -eq $evmNetwork })[0]
 $evmContract = [string]$evmInfo.contractAddress
 if ($evmContract -notmatch '^0x[0-9a-fA-F]{40}$') {
@@ -351,6 +351,7 @@ Codex Desktop worker-run guardrails:
 - Keep the same `codex exec` process responsible for the complete funded cycle: read `description`/`brief` -> preflight while escrow is `created` -> stake only after success -> primary `delegation submit` -> `escrow submit-work` -> receipt for the latest deliverable -> wake for revisions/disputes/release/self-claim -> repeat until economic terminal state. `work respond` is revision-only.
 - If a Codex runner sees the exact delegation still `offered` or `accepted`/`awaiting_fund` with no escrow lock, it should stop cleanly. The watchdog owns default offer acceptance and buyer funding waits.
 - Pin a known-working model/tier for unattended runs instead of inheriting possibly invalid desktop config. Test with a small `codex exec` prompt before enabling the scheduler.
+- The runner validates candidates with `codex --version`. Use `--codex-path <path>` on the monitor or set `ARP_CODEX_PATH` when automatic discovery cannot select the intended `.exe` or `.cmd`.
 - Run every delegation in its own empty directory under the worker-only workspace. Never point unattended runs at an existing repository or personal directory.
 - `--max-runtime-minutes` defaults to `0` (no fixed lifetime), so a healthy process can own the delegation through buyer revisions, disputes, and settlement. Operators may set a positive emergency cap; a replacement run is crash/timeout recovery, not the normal lifecycle.
 - Keep heartbeating while `codex exec` is alive by appending `delegationId<TAB>epoch` to `dispatched.txt` every minute from the runner.
