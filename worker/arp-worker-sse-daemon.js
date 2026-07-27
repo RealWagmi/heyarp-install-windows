@@ -24,6 +24,20 @@ function parseArgs(argv) {
   return out;
 }
 
+function configureHeyarpHome(args) {
+  const configured = args['heyarp-home'];
+  if (configured === undefined) {
+    throw new Error('--heyarp-home is required for the scheduled worker');
+  }
+  if (configured === true || String(configured).trim() === '') {
+    throw new Error('--heyarp-home requires a directory path');
+  }
+  const resolved = path.resolve(String(configured));
+  args['heyarp-home'] = resolved;
+  process.env.HEYARP_HOME = resolved;
+  return resolved;
+}
+
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -50,12 +64,39 @@ function getStateRoot(args) {
   return args['state-root'] || path.join(home, '.heyarp-worker');
 }
 
+function runStartupPreflight(args) {
+  const preflight = path.join(__dirname, 'arp-worker-preflight.js');
+  if (!fs.existsSync(preflight)) throw new Error(`worker preflight script missing at ${preflight}`);
+  const preflightArgs = [
+    preflight,
+    '--heyarp-home', args['heyarp-home'],
+    '--from-did', args['from-did'],
+  ];
+  const acceptPolicies = args['accept-policy'] === undefined
+    ? []
+    : (Array.isArray(args['accept-policy']) ? args['accept-policy'] : [args['accept-policy']]);
+  for (const policy of acceptPolicies) preflightArgs.push('--accept-policy', policy);
+  const result = spawnSync(process.execPath, preflightArgs, {
+    cwd: args.workspace ? path.resolve(args.workspace) : process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 60000,
+  });
+  if (result.error) throw new Error(`worker startup preflight failed: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error((result.stderr || result.stdout || 'worker startup preflight failed').trim());
+  }
+  return String(result.stdout || '').trim();
+}
+
 function runWatchdog(args, log, reason) {
   const watchdog = path.join(__dirname, 'arp-worker-watchdog.js');
   const watchdogArgs = [watchdog];
   if (args.workspace) watchdogArgs.push('--workspace', path.resolve(args.workspace));
   if (args['state-root']) watchdogArgs.push('--state-root', args['state-root']);
   if (args['from-did']) watchdogArgs.push('--from-did', args['from-did']);
+  if (args['heyarp-home']) watchdogArgs.push('--heyarp-home', args['heyarp-home']);
   if (args['codex-path']) watchdogArgs.push('--codex-path', args['codex-path']);
   if (args['stall-min']) watchdogArgs.push('--stall-min', args['stall-min']);
   if (args['max-jobs']) watchdogArgs.push('--max-jobs', args['max-jobs']);
@@ -101,6 +142,7 @@ function startTail(args, log) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const heyarpHome = configureHeyarpHome(args);
   if (!args['from-did']) throw new Error('--from-did is required for the SSE worker daemon');
 
   const stateRoot = getStateRoot(args);
@@ -108,6 +150,13 @@ function main() {
   ensureDir(stateRoot);
   const logFile = path.join(stateRoot, 'sse-daemon.log');
   const log = (message) => appendLine(logFile, `${new Date().toISOString()} ${message}`);
+  try {
+    const preflightResult = runStartupPreflight(args);
+    log(preflightResult);
+  } catch (error) {
+    log(`startup blocked: ${error.message}`);
+    throw error;
+  }
 
   const reconcileMs = Math.max(1000, parseNonNegativeNumber(args['reconcile-seconds'], 30) * 1000);
   const activePollMs = Math.max(1000, parseNonNegativeNumber(args['active-poll-seconds'], 2) * 1000);
@@ -229,7 +278,7 @@ function main() {
   process.on('SIGTERM', () => shutdown('sigterm'));
   process.on('SIGINT', () => shutdown('sigint'));
 
-  log(`daemon start fromDid=${args['from-did']} reconcile_ms=${reconcileMs} active_poll_ms=${activePollMs} active_window_ms=${activeWindowMs}`);
+  log(`daemon start fromDid=${args['from-did']} heyarpHome=${heyarpHome || '<default>'} reconcile_ms=${reconcileMs} active_poll_ms=${activePollMs} active_window_ms=${activeWindowMs}`);
   requestTick('daemon-start', false);
   attachTail();
 
@@ -246,15 +295,22 @@ function main() {
   keepAlive = setInterval(() => {}, 60 * 60 * 1000);
 }
 
-try {
-  main();
-} catch (error) {
-  const home = process.env.USERPROFILE || process.env.HOME || process.cwd();
-  const fallbackLog = path.join(home, '.heyarp-worker', 'sse-daemon.log');
+if (require.main === module) {
   try {
-    appendLine(fallbackLog, `${new Date().toISOString()} ERROR ${error.stack || error.message}`);
-  } catch (_) {
-    // Nothing else to do.
+    main();
+  } catch (error) {
+    const home = process.env.USERPROFILE || process.env.HOME || process.cwd();
+    const fallbackLog = path.join(home, '.heyarp-worker', 'sse-daemon.log');
+    try {
+      appendLine(fallbackLog, `${new Date().toISOString()} ERROR ${error.stack || error.message}`);
+    } catch (_) {
+      // Nothing else to do.
+    }
+    process.exitCode = 1;
   }
-  process.exitCode = 1;
 }
+
+module.exports = {
+  configureHeyarpHome,
+  runStartupPreflight,
+};

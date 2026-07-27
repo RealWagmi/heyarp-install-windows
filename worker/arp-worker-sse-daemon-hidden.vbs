@@ -3,7 +3,7 @@
 
 Option Explicit
 
-Dim shell, fso, scriptDir, daemon, i, command, forwardedArgs
+Dim shell, fso, scriptDir, daemon, i, command, forwardedArgs, exitCode
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -21,7 +21,8 @@ If Len(forwardedArgs) = 0 Then
 End If
 
 command = "cmd.exe /d /s /c ""node " & Quote(daemon) & forwardedArgs & """"
-shell.Run command, 0, True
+exitCode = shell.Run(command, 0, True)
+WScript.Quit exitCode
 
 Function Quote(value)
     Quote = """" & Replace(value, """", "\""") & """"
