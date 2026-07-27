@@ -22,6 +22,20 @@ function parseArgs(argv) {
   return out;
 }
 
+function configureHeyarpHome(args) {
+  const configured = args['heyarp-home'];
+  if (configured === undefined) {
+    throw new Error('--heyarp-home is required for the scheduled worker');
+  }
+  if (configured === true || String(configured).trim() === '') {
+    throw new Error('--heyarp-home requires a directory path');
+  }
+  const resolved = path.resolve(String(configured));
+  args['heyarp-home'] = resolved;
+  process.env.HEYARP_HOME = resolved;
+  return resolved;
+}
+
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -270,6 +284,7 @@ Do not repeat non-idempotent actions that live state shows are already done.
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const heyarpHome = configureHeyarpHome(args);
   const expectedWorkspace = path.resolve(requireArg(args, 'workspace'));
   const openclawAgent = requireArg(args, 'openclaw-agent');
   const relationshipId = requireArg(args, 'relationship-id');
@@ -304,7 +319,7 @@ function main() {
   };
   const prompt = buildPrompt(context);
 
-  appendLine(runnerLog, `${new Date().toISOString()} start pid=${process.pid} openclaw=${openclaw} agent=${openclawAgent} workspace=${workspace} taskWorkspace=${taskWorkspace}`);
+  appendLine(runnerLog, `${new Date().toISOString()} start pid=${process.pid} openclaw=${openclaw} agent=${openclawAgent} workspace=${workspace} taskWorkspace=${taskWorkspace} heyarpHome=${heyarpHome}`);
   fs.writeFileSync(promptFile, prompt, { encoding: 'utf8' });
 
   const heartbeat = setInterval(() => {
@@ -392,6 +407,7 @@ module.exports = {
   buildOpenClawArgs,
   buildOpenClawInvocation,
   buildPrompt,
+  configureHeyarpHome,
   prepareDelegationTaskWorkspace,
   resolveOpenClaw,
   resolveOpenClawAgent,

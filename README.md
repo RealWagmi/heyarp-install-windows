@@ -13,7 +13,7 @@
 
 1. **Install** - run the PowerShell installer command with a command **timeout >= 600s** (opengrep is a ~40 MB download). -> section 1
 2. **Put `heyarp` on PATH permanently** (the Windows user PATH) - every later command needs it. -> section 1
-3. **Server + RPC** - leave production/mainnet defaults unchanged unless the user explicitly provides custom configuration. -> section 2
+3. **Server + RPC** - keep the production server and CLI RPC choices unless the user provides custom configuration; worker setup must later persist the resolved RPC for every accepted network. -> section 2
 4. **Login** - run **in the background, redirect to a file, timeout >= 600s**; read the URL from the file; hand it to the **user**; then **WAIT**. **NEVER kill or retry** the login. -> section 3
 5. **Register the agent** - collect the required name and role. Ask for a description and tags, which can be changed later with `heyarp update`. The name cannot be changed. -> section 3
 6. **Fund settlement for the selected rails** - give the user the Solana/EVM settlement addresses and fund the order assets, worker stake, and gas needed for the networks they will use. -> section 4
@@ -27,7 +27,7 @@
 - **Starting before reading the whole guide.** Build the checklist above first.
 - **Killing `heyarp login`.** Credentials are saved **only** when the user approves; a killed or retried login loses them and the old URL dies. Background it and wait.
 - **Running `heyarp login` in the foreground.** Use background + redirect to a file, then read the URL from the file.
-- **Changing server/RPC by default.** Production/mainnet is the default path. Leave the CLI defaults unchanged unless the user explicitly provides custom configuration.
+- **Replacing server/RPC defaults without a reason.** Production/mainnet is the default path. Keep the CLI-selected endpoints unless the user provides custom configuration. A worker must still persist the resolved endpoint in `rpc.<network>` for every network it accepts because strict escrow commands do not use implicit RPC defaults.
 - **Logging in or signing on the user's behalf.** Hand the URL over; the user approves with **their own** wallet. This decides whose money moves on-chain.
 - **Stopping after `heyarp whoami`.** Registered != operational. You must still download and install the skills (step 9).
 - **Offering skills as optional ("if you want").** Operating the protocol **requires** a skill - only the _role choice_ (buyer / worker / both) is the user's.
@@ -105,7 +105,7 @@ heyarp -h
 
 ## 2. Server & Network Configuration
 
-> **AI agent: production/mainnet is the default.** Do not ask the user for a server URL and do not configure server/RPC by default. Leave the CLI's built-in defaults unchanged. Set a custom server/RPC only if the user explicitly provides custom configuration.
+> **AI agent: production/mainnet is the default.** Do not ask the user for a server URL. Keep the CLI's built-in endpoint choice unless the user explicitly provides custom configuration. During worker setup, persist the resolved endpoint in `rpc.<network>` for every network that worker accepts; strict escrow commands intentionally do not use an implicit RPC default.
 
 Network configuration is per network. Discover live values instead of assuming them:
 
@@ -124,6 +124,8 @@ heyarp networks
 ```
 
 Confirm that `solana-devnet` and `robinhood-testnet` are active before login or registration. For any other custom server or network, use the configuration explicitly provided by the user. Use network-qualified keys, and run `heyarp config list` to inspect the configured `rpc.<network>` and `contract.<network>` settings.
+
+`heyarp networks --json` reports each known network's resolved `rpcUrl` and `rpcSource`. The worker skill uses that catalog to save CLI defaults for accepted networks. If the RPC comes only from an environment variable, persist the exact unredacted URL explicitly so the background worker and strict escrow commands can use it reliably.
 
 The CLI resolves EVM contracts from `--contract` or `contract.<network>`. `heyarp escrow info` shows the server-known EVM contract address, but EVM commands do not use it automatically; pass `--contract` or configure `contract.<network>` locally.
 
@@ -310,7 +312,7 @@ Fetch **only the chosen role(s)**. On Windows, install the skills into OpenClaw'
 >
 > The `HEYARP_HOME` isolation pattern (separate `agents.json`) is ONLY for when the user wants **different** agents for buyer and worker (different wallets, different DIDs). In that case, ask the user explicitly: _"Do you want ONE agent as both buyer and worker, or TWO separate agents?"_
 >
-> Worker watchdogs are different: every scheduled worker task must be pinned to its worker DID with `--from-did` and a DID-specific state root. This avoids breakage when another local agent is registered later in the same `agents.json`.
+> Worker watchdogs are different: every scheduled worker task must be pinned to its worker DID with `--from-did`, its exact agent home with `--heyarp-home`, and a DID-specific state root. This prevents a separate worker from reading the default buyer's keys or RPC configuration and avoids breakage when another local agent is registered later.
 >
 > The worker skill also creates dedicated OpenClaw runtime-agent slots. These are not additional HeyARP identities: they only give unattended jobs isolated OpenClaw workspaces and sessions. The user's normal OpenClaw `main` workspace is never used for buyer tasks.
 
@@ -328,6 +330,7 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-watchdog-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-watchdog-hidden.vbs"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-sse-daemon.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs"
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-preflight.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-preflight.js"
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/worker/arp-worker-run-openclaw.js' -OutFile "$skillsRoot\arp-worker-flow\arp-worker-run-openclaw.js"
 ```
 
@@ -364,7 +367,7 @@ Then **read and follow the installed skill's own setup instructions.** Note:
   Get-Content -LiteralPath "$HOME\.openclaw\skills\arp-worker-flow\SKILL.md" -Raw
   ```
   > For the worker role, setup is not done until that scheduled watchdog is verified running.
-  > Follow the worker skill's watchdog setup exactly: create one scheduled task per worker DID, pass `--from-did`, and use a separate state root for each worker.
+  > Follow the worker skill's watchdog setup exactly: create one scheduled task per worker DID, pass `--from-did` and `--heyarp-home`, and use a separate state root for each worker.
 - **buyer** is used on-demand; no scheduled watchdog needed.
 
 The skills carry the full buyer/worker flow, monitoring, and pitfalls; this guide covered **install + registration only**.
@@ -399,7 +402,7 @@ if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
 }
 ```
 
-Configure each active network through `rpc.<network>` before this check. Do not pass one shared `--rpc-url` when both Solana and EVM are active.
+For a worker, configure each accepted network through `rpc.<network>` before this check. Do not pass one shared `--rpc-url` when both Solana and EVM are accepted.
 
 The one thing it can't see is your **framework's** config, so **step 8 (time/turn budget) you must still verify yourself.** The list below is the human-readable fallback - any "no" -> go back to that step; a passing `whoami` is **not** completion:
 

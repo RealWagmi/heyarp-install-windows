@@ -94,6 +94,20 @@ function withFromDid(args, fromDid) {
   return fromDid ? [...args, '--from-did', fromDid] : args;
 }
 
+function configureHeyarpHome(args) {
+  const configured = args['heyarp-home'];
+  if (configured === undefined) {
+    throw new Error('--heyarp-home is required for the scheduled worker');
+  }
+  if (configured === true || String(configured).trim() === '') {
+    throw new Error('--heyarp-home requires a directory path');
+  }
+  const resolved = path.resolve(String(configured));
+  args['heyarp-home'] = resolved;
+  process.env.HEYARP_HOME = resolved;
+  return resolved;
+}
+
 // Resolve all persistent worker paths.
 // Everything under .heyarp-worker survives process exits and PC reboots.
 function getStatePaths(args) {
@@ -660,6 +674,7 @@ function buildWorkerArgs(context, paths, workspace, runnerPath) {
   if (context.eventId) workerArgs.push('--event-id', context.eventId);
   if (context.requestId) workerArgs.push('--request-id', context.requestId);
   if (context.fromDid) workerArgs.push('--from-did', context.fromDid);
+  if (process.env.HEYARP_HOME) workerArgs.push('--heyarp-home', process.env.HEYARP_HOME);
   if (context.openclawPath) workerArgs.push('--openclaw-path', context.openclawPath);
   if (context.maxRuntimeMinutes !== undefined) workerArgs.push('--max-runtime-minutes', String(context.maxRuntimeMinutes));
   return workerArgs;
@@ -846,6 +861,7 @@ function handleLine(line, paths, workspace, log, fromDid, maxRuntimeMinutes, ope
 // 5. Exit quickly so Task Scheduler can call us again next minute.
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const heyarpHome = configureHeyarpHome(args);
   const workspace = path.resolve(args.workspace || process.cwd());
   const stallMinutes = parseNonNegativeNumber(args['stall-min'], 3);
   const maxJobs = parseNonNegativeNumber(args['max-jobs'] || process.env.ARP_WORKER_MAX_JOBS, 1);
@@ -860,6 +876,7 @@ function main() {
   const log = (message) => appendLine(paths.monitorLog, `${new Date().toISOString()} ${message}`);
 
   withMonitorLock(paths, () => {
+    log(`heyarp home ${heyarpHome || '<default>'}`);
     log(`accept policies ${acceptPolicies.map((policy) => `exact_amount=${policy.amount} asset=${policy.asset}`).join('; ')}`);
     // seen.txt prevents processing the same inbox event twice.
     // dispatched.txt tells us which active tasks already have a worker run.
@@ -1039,6 +1056,7 @@ module.exports = {
   buildWorkerArgs,
   classifyFundedState,
   compareDecimal,
+  configureHeyarpHome,
   evaluateAcceptPolicies,
   evaluateAcceptPolicy,
   hasPrimaryRefusal,

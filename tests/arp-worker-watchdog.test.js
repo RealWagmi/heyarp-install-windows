@@ -11,6 +11,7 @@ const {
   buildEscrowShowArgs,
   buildWorkerArgs,
   classifyFundedState,
+  configureHeyarpHome,
   evaluateAcceptPolicies,
   evaluateAcceptPolicy,
   hasPrimaryRefusal,
@@ -74,6 +75,33 @@ test('watchdog selects a free isolated OpenClaw agent workspace', () => {
   );
 
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('watchdog pins HEYARP_HOME and forwards it to delegation runners', () => {
+  const previous = process.env.HEYARP_HOME;
+  try {
+    const args = { 'heyarp-home': 'C:\\Users\\1\\.heyarp-homes\\worker-one' };
+    const resolved = configureHeyarpHome(args);
+    assert.equal(resolved, path.resolve(args['heyarp-home']));
+    assert.equal(process.env.HEYARP_HOME, resolved);
+
+    const workerArgs = buildWorkerArgs(
+      { relationshipId: 'rel-1', delegationId: 'del-1', fromDid: 'did:arp:worker' },
+      { stateRoot: 'C:\\state' },
+      'C:\\workspace',
+      'C:\\skill\\arp-worker-run-openclaw.js',
+    );
+    const homeIndex = workerArgs.indexOf('--heyarp-home');
+    assert.notEqual(homeIndex, -1);
+    assert.equal(workerArgs[homeIndex + 1], resolved);
+  } finally {
+    if (previous === undefined) delete process.env.HEYARP_HOME;
+    else process.env.HEYARP_HOME = previous;
+  }
+});
+
+test('watchdog rejects a missing pinned HEYARP_HOME', () => {
+  assert.throws(() => configureHeyarpHome({}), /--heyarp-home is required/);
 });
 
 test('unfunded delegations are never actionable', () => {

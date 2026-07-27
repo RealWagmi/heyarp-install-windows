@@ -10,11 +10,29 @@ const {
   buildOpenClawArgs,
   buildOpenClawInvocation,
   buildPrompt,
+  configureHeyarpHome,
   prepareDelegationTaskWorkspace,
   resolveOpenClaw,
   resolveOpenClawAgent,
   validateOpenClawCandidate,
 } = require('../worker/arp-worker-run-openclaw');
+
+test('delegation runner pins HEYARP_HOME for the OpenClaw child', () => {
+  const previous = process.env.HEYARP_HOME;
+  try {
+    const args = { 'heyarp-home': 'C:\\Users\\1\\.heyarp-homes\\worker-one' };
+    const resolved = configureHeyarpHome(args);
+    assert.equal(args['heyarp-home'], resolved);
+    assert.equal(process.env.HEYARP_HOME, resolved);
+  } finally {
+    if (previous === undefined) delete process.env.HEYARP_HOME;
+    else process.env.HEYARP_HOME = previous;
+  }
+});
+
+test('delegation runner rejects a missing pinned HEYARP_HOME', () => {
+  assert.throws(() => configureHeyarpHome({}), /--heyarp-home is required/);
+});
 
 test('OpenClaw worker prompt uses the v4 primary delegation flow', () => {
   const prompt = buildPrompt({
