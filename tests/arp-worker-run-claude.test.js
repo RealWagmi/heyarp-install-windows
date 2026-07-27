@@ -7,6 +7,7 @@ const {
   buildClaudeArgs,
   buildClaudeInvocation,
   buildPrompt,
+  configureHeyarpHome,
   resolveClaude,
   validateClaudeCandidate,
 } = require('../worker/arp-worker-run-claude');
@@ -26,6 +27,23 @@ test('Claude Code worker prompt uses the v4 primary delegation flow', () => {
   assert.match(prompt, /heyarp delegation submit del-1/);
   assert.match(prompt, /work requests are revision rounds only/);
   assert.doesNotMatch(prompt, /Before accepting.*wait for work\.requested/);
+});
+
+test('delegation runner pins HEYARP_HOME for the Claude Code child', () => {
+  const previous = process.env.HEYARP_HOME;
+  try {
+    const args = { 'heyarp-home': 'C:\\Users\\1\\.heyarp-homes\\worker-one' };
+    const resolved = configureHeyarpHome(args);
+    assert.equal(args['heyarp-home'], resolved);
+    assert.equal(process.env.HEYARP_HOME, resolved);
+  } finally {
+    if (previous === undefined) delete process.env.HEYARP_HOME;
+    else process.env.HEYARP_HOME = previous;
+  }
+});
+
+test('delegation runner rejects a missing pinned HEYARP_HOME', () => {
+  assert.throws(() => configureHeyarpHome({}), /--heyarp-home is required/);
 });
 
 test('worker prompt keeps one process responsive to every delegation turn', () => {

@@ -43,7 +43,7 @@ Copy-Item -LiteralPath "$HOME\.heyshield\opengrep\bin\opengrep.exe" -Destination
 
 Before starting the worker monitor, ask the user which exact asset/amount pairs this worker accepts. If the user does not choose, accept both `0.1 SOL` on Solana mainnet and `0.005 ETH` on the active EVM network advertised by the server.
 
-Resolve the canonical CAIP-19 asset IDs, configure the EVM RPC and contract, and publish matching server preferences. Do not pass shorthand asset names to `agents accept-prefs set`.
+Resolve the canonical CAIP-19 asset IDs, persist one RPC for every accepted network, configure the EVM contract, and publish matching server preferences. Do not pass shorthand asset names to `agents accept-prefs set`. `heyarp networks` can display CLI defaults, but strict escrow commands intentionally require the selected network RPC to be saved in `rpc.<network>` (or supplied explicitly). Do not leave a worker-accepted network on an implicit default.
 
 ```powershell
 $fromDid = 'did:arp:<worker-did>'
@@ -63,12 +63,29 @@ if (-not $solAsset.assetId -or -not $ethAsset.assetId -or -not $evmNetworkRow.ne
 
 $evmNetwork = [string]$evmNetworkRow.network
 $networkCatalog = heyarp networks --json | ConvertFrom-Json
-$evmRuntime = @($networkCatalog.networks | Where-Object { $_.network -eq $evmNetwork })[0]
-if (-not $evmRuntime.rpcUrl) {
-  throw "No worker-side RPC resolves for $evmNetwork. Configure it with: heyarp config set rpc.$evmNetwork <url>"
-}
-if ($evmRuntime.rpcSource -eq 'default') {
-  heyarp config set "rpc.$evmNetwork" ([string]$evmRuntime.rpcUrl)
+
+$acceptedNetworks = @([string]$solNetwork.network, $evmNetwork) | Select-Object -Unique
+foreach ($network in $acceptedNetworks) {
+  $runtime = @($networkCatalog.networks | Where-Object { $_.network -eq $network })[0]
+  if (-not $runtime -or -not $runtime.rpcUrl) {
+    throw "No worker-side RPC resolves for $network. Configure it with: heyarp config set rpc.$network <url>"
+  }
+
+  if ($runtime.rpcSource -eq 'default') {
+    heyarp config set "rpc.$network" ([string]$runtime.rpcUrl)
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to persist the CLI default RPC for $network."
+    }
+  }
+
+  $savedRpc = [string](heyarp config get "rpc.$network")
+  $savedRpc = $savedRpc.Trim()
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($savedRpc) -or $savedRpc -eq '(not set)') {
+    if ($runtime.rpcSource -eq 'env') {
+      throw "RPC for $network currently comes only from an environment variable. Persist the exact unredacted URL with: heyarp config set rpc.$network <url>"
+    }
+    throw "Strict escrow commands require a persisted RPC for $network. Run: heyarp config set rpc.$network <url>"
+  }
 }
 
 $escrowInfo = heyarp escrow info --json | ConvertFrom-Json
@@ -137,7 +154,7 @@ Windows-specific guardrails:
 - Only wake Claude Code after positive proof of buyer funding. A server task row by itself is not enough.
 - Process `NEW handshake` and policy-checked delegation acceptance/decline inline in the watchdog; process funded/executable worker orders from `heyarp tasks --next --json`; use the separate `disputing` read only for monitoring recovery.
 - Treat lock files as hints, not proof of progress. Stale locks are removed. Terminal cleanup includes `failed`, `revoked`, `dispute_resolved`, and `dispute_closed`. Operators may configure a positive maximum runtime as an emergency cap for a live but hung Claude Code process; the default has no fixed lifetime.
-- Every scheduled worker task must be pinned to exactly one worker DID. Always pass `--from-did <worker-did>` and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the watchdog from breaking later when another agent is added to the same `%USERPROFILE%\.heyarp\agents.json`.
+- Every scheduled worker task must be pinned to exactly one worker identity. Always pass `--from-did <worker-did>`, its exact `--heyarp-home <path>`, and a DID-specific `--state-root`, even if there is only one local agent right now. This prevents the worker from reading another agent's keys or network configuration.
 
 ## 1. Continuous inbox monitor
 
@@ -166,6 +183,7 @@ Minimal Windows layout:
 <skillsRoot>\arp-worker-flow\arp-worker-watchdog-hidden.vbs
 <skillsRoot>\arp-worker-flow\arp-worker-sse-daemon.js
 <skillsRoot>\arp-worker-flow\arp-worker-sse-daemon-hidden.vbs
+<skillsRoot>\arp-worker-flow\arp-worker-preflight.js
 <skillsRoot>\arp-worker-flow\arp-worker-run-claude.js
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\seen.txt
 %USERPROFILE%\.heyarp-worker\<safe-worker-did>\dispatched.txt
@@ -185,6 +203,7 @@ Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/worker/arp-worker-watchdog-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-watchdog-hidden.vbs')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/worker/arp-worker-sse-daemon.js' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/worker/arp-worker-sse-daemon-hidden.vbs' -OutFile (Join-Path $workerSkill 'arp-worker-sse-daemon-hidden.vbs')
+Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/worker/arp-worker-preflight.js' -OutFile (Join-Path $workerSkill 'arp-worker-preflight.js')
 Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/claude-code/worker/arp-worker-run-claude.js' -OutFile (Join-Path $workerSkill 'arp-worker-run-claude.js')
 ```
 
@@ -199,6 +218,14 @@ $fromDid = 'did:arp:<worker-did>' # REQUIRED: use the DID of this worker agent.
 if ($fromDid -notmatch '^did:arp:') {
   throw 'Set $fromDid to the worker DID before registering the monitor.'
 }
+$heyarpHome = if ([string]::IsNullOrWhiteSpace($env:HEYARP_HOME)) {
+  Join-Path $HOME '.heyarp'
+} else {
+  [IO.Path]::GetFullPath($env:HEYARP_HOME)
+}
+if (-not (Test-Path -LiteralPath $heyarpHome -PathType Container)) {
+  throw "The worker HEYARP_HOME does not exist: $heyarpHome"
+}
 $safeDid = ($fromDid -replace '[^A-Za-z0-9_.-]', '_')
 $taskName = "ARP worker monitor $safeDid"
 $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
@@ -209,7 +236,17 @@ if (-not $acceptPolicies -or $acceptPolicies.Count -lt 1 -or -not $maxJobs) {
   throw 'Run the Required accept policy block in this PowerShell session before registering the monitor.'
 }
 $policyArgs = ($acceptPolicies | ForEach-Object { " --accept-policy `"$($_)`"" }) -join ''
-$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`"$policyArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --heyarp-home `"$heyarpHome`"$policyArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
+
+$preflight = Join-Path $workerSkill 'arp-worker-preflight.js'
+$preflightArgs = @($preflight, '--heyarp-home', $heyarpHome, '--from-did', $fromDid)
+foreach ($policy in $acceptPolicies) {
+  $preflightArgs += @('--accept-policy', $policy)
+}
+& node @preflightArgs
+if ($LASTEXITCODE -ne 0) {
+  throw 'Worker preflight failed. The scheduled monitor was not registered.'
+}
 
 $action = New-ScheduledTaskAction `
   -Execute 'wscript.exe' `
@@ -246,7 +283,9 @@ Register-ScheduledTask `
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
 `RunLevel Limited` is intentional for Windows PowerShell 5.1; `LeastPrivilege` is not a valid ScheduledTasks enum value on this system.
 
-For multiple worker agents on the same Windows account, repeat the registration block once per worker DID. Do not share `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
+The same fail-closed preflight runs twice: once before Task Scheduler registration and again whenever the SSE daemon starts. It verifies that the pinned `HEYARP_HOME` contains the intended worker DID, every accepted asset maps to an active network, each `rpc.<network>` is explicitly saved and responds from the expected chain, the Solana escrow program is discoverable, and each accepted EVM rail has a saved contract matching the server. If it fails, the daemon logs `startup blocked` and exits before opening the inbox stream or accepting work.
+
+For multiple worker agents on the same Windows account, repeat the registration block once per worker DID and run it while that worker's `HEYARP_HOME` is selected. The scheduled action pins the resolved home with `--heyarp-home`; the SSE daemon forwards it to the watchdog and delegation runner, which export it to every child process. Do not share a HeyARP home, `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
 The watchdog should:
 
@@ -283,21 +322,48 @@ $stateRoot = Join-Path $HOME ".heyarp-worker\$safeDid"
 
 Start-ScheduledTask -TaskName $taskName
 Start-Sleep -Seconds 5
-Get-ScheduledTask -TaskName $taskName
+$task = Get-ScheduledTask -TaskName $taskName
+$task
 Get-ScheduledTaskInfo -TaskName $taskName
 Get-Content -LiteralPath (Join-Path $stateRoot 'sse-daemon.log') -Tail 10
 Get-Content -LiteralPath (Join-Path $stateRoot 'monitor.log') -Tail 10
-$env:ARP_WORKER_DISPATCHED = Join-Path $stateRoot 'dispatched.txt'
-$selftest = heyarp selftest --role worker --skills-dir "$HOME\.claude\skills" --json | ConvertFrom-Json
-$selftestExit = $LASTEXITCODE
-$selftest.checks | Select-Object id,did,status,detail | Format-Table -AutoSize
-$notPassed = @($selftest.checks | Where-Object { $_.status -ne 'pass' })
-if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
-  throw "Worker selftest is not fully verified: $($notPassed.id -join ', ')"
+$taskArguments = [string]$task.Actions[0].Arguments
+$pinnedHomeArgument = "--heyarp-home `"$heyarpHome`""
+if (-not $taskArguments.Contains($pinnedHomeArgument)) {
+  throw "Scheduled task does not pin the expected HEYARP_HOME: $heyarpHome"
+}
+
+$previousHeyarpHome = $env:HEYARP_HOME
+try {
+  $env:HEYARP_HOME = $heyarpHome
+
+  $localAgent = heyarp whoami --local --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0 -or $localAgent.did -ne $fromDid) {
+    throw "HEYARP_HOME identity mismatch: expected $fromDid, found $($localAgent.did)"
+  }
+
+  foreach ($network in $acceptedNetworks) {
+    $savedRpc = [string](heyarp config get "rpc.$network")
+    $savedRpc = $savedRpc.Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($savedRpc) -or $savedRpc -eq '(not set)') {
+      throw "HEYARP_HOME is missing rpc.$network`: $heyarpHome"
+    }
+  }
+
+  $env:ARP_WORKER_DISPATCHED = Join-Path $stateRoot 'dispatched.txt'
+  $selftest = heyarp selftest --role worker --skills-dir "$HOME\.claude\skills" --json | ConvertFrom-Json
+  $selftestExit = $LASTEXITCODE
+  $selftest.checks | Select-Object id,did,status,detail | Format-Table -AutoSize
+  $notPassed = @($selftest.checks | Where-Object { $_.status -ne 'pass' })
+  if ($selftestExit -ne 0 -or $notPassed.Count -gt 0) {
+    throw "Worker selftest is not fully verified: $($notPassed.id -join ', ')"
+  }
+} finally {
+  $env:HEYARP_HOME = $previousHeyarpHome
 }
 ```
 
-`selftest` itself exits nonzero only for definite failures; warnings and unknown results are advisories. The stricter block above requires every Windows worker check to pass before onboarding is reported complete. Onboarding/selftest should verify the required RPC before enabling the worker. Keep per-network RPCs in `rpc.<network>` configuration; do not pass one shared `--rpc-url` when both Solana and EVM are active.
+`selftest` itself exits nonzero only for definite failures; warnings and unknown results are advisories. The stricter block above requires every Windows worker check to pass before onboarding is reported complete. The Required accept policy block must persist and verify `rpc.<network>` for every network the worker accepts before enabling the monitor. Do not pass one shared `--rpc-url` when both Solana and EVM are accepted.
 
 Remove the task:
 

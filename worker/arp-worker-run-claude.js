@@ -22,6 +22,20 @@ function parseArgs(argv) {
   return out;
 }
 
+function configureHeyarpHome(args) {
+  const configured = args['heyarp-home'];
+  if (configured === undefined) {
+    throw new Error('--heyarp-home is required for the scheduled worker');
+  }
+  if (configured === true || String(configured).trim() === '') {
+    throw new Error('--heyarp-home requires a directory path');
+  }
+  const resolved = path.resolve(String(configured));
+  args['heyarp-home'] = resolved;
+  process.env.HEYARP_HOME = resolved;
+  return resolved;
+}
+
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -184,6 +198,7 @@ Do not repeat non-idempotent actions that live state shows are already done.
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  const heyarpHome = configureHeyarpHome(args);
   const workspaceRoot = path.resolve(requireArg(args, 'workspace'));
   const relationshipId = requireArg(args, 'relationship-id');
   const delegationId = requireArg(args, 'delegation-id');
@@ -214,7 +229,7 @@ function main() {
     refusalLog: path.join(logsRoot, `${delegationId}.refusal.txt`),
   };
 
-  appendLine(runnerLog, `${new Date().toISOString()} start pid=${process.pid} claude=${claude}`);
+  appendLine(runnerLog, `${new Date().toISOString()} start pid=${process.pid} claude=${claude} heyarpHome=${heyarpHome}`);
   fs.writeFileSync(promptFile, buildPrompt(context), { encoding: 'utf8' });
 
   const heartbeat = setInterval(() => {
@@ -283,6 +298,7 @@ module.exports = {
   buildClaudeArgs,
   buildClaudeInvocation,
   buildPrompt,
+  configureHeyarpHome,
   resolveClaude,
   validateClaudeCandidate,
 };
