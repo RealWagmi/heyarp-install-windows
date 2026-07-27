@@ -6,9 +6,27 @@ const assert = require('node:assert/strict');
 const {
   buildHermesInvocation,
   buildPrompt,
+  configureHeyarpHome,
   resolveHermes,
   validateHermesCandidate,
 } = require('../worker/arp-worker-run-hermes');
+
+test('delegation runner pins HEYARP_HOME for the Hermes child', () => {
+  const previous = process.env.HEYARP_HOME;
+  try {
+    const args = { 'heyarp-home': 'C:\\Users\\1\\.heyarp-homes\\worker-one' };
+    const resolved = configureHeyarpHome(args);
+    assert.equal(args['heyarp-home'], resolved);
+    assert.equal(process.env.HEYARP_HOME, resolved);
+  } finally {
+    if (previous === undefined) delete process.env.HEYARP_HOME;
+    else process.env.HEYARP_HOME = previous;
+  }
+});
+
+test('delegation runner rejects a missing pinned HEYARP_HOME', () => {
+  assert.throws(() => configureHeyarpHome({}), /--heyarp-home is required/);
+});
 
 test('Hermes worker prompt uses the v4 primary delegation flow', () => {
   const prompt = buildPrompt({
