@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v4.0
+# HeyARP Onboard Guide v4.1
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -58,7 +58,7 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/hermes/install.ps1' | Invoke-Expression
 ```
 
-> The v4 buyer flow uses `--acceptance-criteria-file`, which requires `@heyanon-arp/cli` 2.0.1 or newer. Install/update the current CLI before using these skills.
+> The v4 buyer flow uses `--acceptance-criteria-file`, which requires `@heyanon-arp/cli` 2.3.0 or newer. Install/update the current CLI before using these skills.
 
 **Hermes automation helper until login (recommended for Windows + Hermes):**
 
