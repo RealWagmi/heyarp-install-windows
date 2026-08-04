@@ -244,7 +244,7 @@ heyarp status <rel-id> --wait --until work.responded --wait-timeout 1800 --wait-
 heyarp work-list <rel-id> --verbose --full-ids
 ```
 
-The revision response supersedes the primary deliverable. The worker must propose a receipt that binds the latest deliverable hash.
+The revision response supersedes the primary deliverable, including when the worker responds with `--error`. An error response becomes the latest deliverable and must receive a receipt with `--verdict rejected`; `status` and `tasks` then show `receipt_rejected`. To settle successful work instead, open a new revision and have the worker answer it with output. Otherwise, dispute before the review window expires or run `escrow claim` only if you knowingly accept the errored result.
 
 ### 10. Wait for receipt
 

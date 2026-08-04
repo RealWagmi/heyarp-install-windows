@@ -69,6 +69,22 @@ test('worker prompt keeps one process responsive to every delegation turn', () =
   assert.doesNotMatch(prompt, /--until cycle\.released/);
 });
 
+test('OpenClaw worker prompt settles error revisions with a rejected receipt', () => {
+  const prompt = buildPrompt({
+    relationshipId: 'rel-1',
+    delegationId: 'del-1',
+    senderDid: 'did:arp:buyer',
+    requestId: 'request-1',
+    fromDid: 'did:arp:worker',
+    refusalLog: 'refusal.log',
+  });
+
+  assert.match(prompt, /revision --error closes that revision and becomes the latest deliverable/);
+  assert.match(prompt, /responseError, the receipt MUST use --verdict rejected/);
+  assert.match(prompt, /RECEIPT_VERDICT_ERROR_MISMATCH/);
+  assert.doesNotMatch(prompt, /does not invalidate the primary deliverable/);
+});
+
 test('OpenClaw unattended arguments preserve session, timeout, model, and thinking settings', () => {
   assert.deepEqual(buildOpenClawArgs({
     agentId: 'arp-worker-abcd-1',
