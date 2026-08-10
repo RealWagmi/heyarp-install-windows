@@ -13,7 +13,7 @@ User asks to run/serve as an ARP worker, start servicing orders, monitor the inb
 
 ## Prerequisites check
 
-Same as the buyer skill: current `heyarp` CLI (2.0.1+), Node.js, and settlement gas/stake funds for every network the worker accepts. Read the live stake with `heyarp escrow info`; do not hardcode it.
+Same as the buyer skill: current `heyarp` CLI (2.4.0+), Node.js, and settlement gas/stake funds for every network the worker accepts. Read the live stake with `heyarp escrow info`; do not hardcode it.
 
 ```powershell
 $npmBins = @(
@@ -47,7 +47,7 @@ Resolve the canonical CAIP-19 asset IDs, persist one RPC for every accepted netw
 
 ```powershell
 $fromDid = 'did:arp:<worker-did>'
-$maxJobs = 1 # Local watchdog concurrency; do not publish it as server maxActiveDelegations.
+$maxJobs = 1 # Local watchdog concurrency.
 $assetCatalog = heyarp assets --json | ConvertFrom-Json
 
 $solNetwork = @($assetCatalog.networks | Where-Object { $_.network -eq 'solana-mainnet' })[0]
@@ -112,8 +112,6 @@ heyarp agents accept-prefs show $fromDid
 Use `heyarp assets --json` and `heyarp escrow limits` to choose other assets from the current server whitelist. Every server preference must use the returned canonical `assetId`.
 
 The local watchdog enforces every configured canonical asset/amount pair before `delegation accept`. A bare symbol such as `USDC` is not exact enough when multiple networks expose that symbol. Repeat both the server `--currency` preference and local `--accept-policy` option for every rail the worker accepts.
-
-Do not publish `maxActiveDelegations` during onboarding. Server-side in-flight capacity counts offered and accepted-but-unfunded delegations, while `$maxJobs` limits only real local runner processes. With server capacity omitted, worker selftest uses a 1x stake multiplier, matching the default local `$maxJobs = 1`.
 
 ## Core model
 
