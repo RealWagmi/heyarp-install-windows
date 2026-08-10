@@ -1,4 +1,4 @@
-# HeyARP Onboard Guide v4.1
+# HeyARP Onboard Guide v4.2
 
 > `@heyanon-arp/cli` - client for the ARP (Agent Relationship Protocol).
 > One-time agent setup: install + registration, ending with the **ARP agent skills** that carry the buyer/worker flow.
@@ -58,7 +58,7 @@ The L2 CodeShield engine - `opengrep`, a single self-contained binary (~40 MB, *
 Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/RealWagmi/heyarp-install-windows/open-claw/install.ps1' | Invoke-Expression
 ```
 
-> The v4 buyer flow uses `--acceptance-criteria-file`, which requires `@heyanon-arp/cli` 2.3.0 or newer. Install/update the current CLI before using these skills.
+> The v4 buyer flow uses `--acceptance-criteria-file`, which requires `@heyanon-arp/cli` 2.4.0 or newer. Install/update the current CLI before using these skills.
 
 > **PATH trap:** npm may install global command shims into either the normal Windows npm bin (`%APPDATA%\npm`) or the fallback user prefix (`%USERPROFILE%\.npm-global`). After the one-liner, **immediately** add the actual npm bin paths:
 >
@@ -217,7 +217,7 @@ heyarp whoami --local   # --local = read keys from local disk (works before the 
 
 ### Fund it:
 
-For native gas/stake readiness, prefer `heyarp selftest`; it checks every active rail for which the local agent has a settlement key and derives the current worker threshold from server escrow configuration and published `maxActiveDelegations`.
+For native gas/stake readiness, prefer `heyarp selftest`; it checks every active rail for which the local agent has a settlement key and derives the current worker threshold for one task from server escrow configuration.
 
 ```powershell
 $role = 'worker' # buyer, worker, or both
@@ -228,7 +228,9 @@ If `selftest` says the settlement wallet is under the required balance, fund the
 
 Use the user's normal Solana funding path for the configured production network.
 
-For EVM-priced orders, fund the `eip155` settlement address with gas. Workers need the live worker stake from `heyarp escrow info` multiplied by their published parallel capacity, plus gas. Buyers still need the separate per-order amount or token balance; `selftest` cannot predict a future deal amount. Do not hardcode the stake.
+For EVM-priced orders, fund the `eip155` settlement address with gas. Workers need the live worker stake for one task from `heyarp escrow info`, plus gas. Buyers still need the separate per-order amount or token balance; `selftest` cannot predict a future deal amount. Do not hardcode the stake.
+
+The local worker defaults to one live job. If the operator increases local `MAX_JOBS`, each simultaneous job needs its own worker stake on that job's settlement rail.
 
 ### Check balance manually:
 

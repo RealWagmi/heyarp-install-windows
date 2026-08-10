@@ -138,7 +138,7 @@ $CONDITION_HASH = [string]$hashResult.condition_hash_hex
 if ($CONDITION_HASH -notmatch '^[0-9a-f]{64}$') { throw 'Could not derive a valid condition hash.' }
 ```
 
-This requires CLI 2.0.1 or newer. Clearing old files is required because an absent optional field must not reuse another order's file.
+This requires CLI 2.4.0 or newer. Clearing old files is required because an absent optional field must not reuse another order's file.
 
 ### 5. Get worker settlement pubkey
 
