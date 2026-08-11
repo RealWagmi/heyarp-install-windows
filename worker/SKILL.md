@@ -280,10 +280,15 @@ for ($slot = 1; $slot -le $maxJobs; $slot++) {
 
 $policyArgs = ($acceptPolicies | ForEach-Object { " --accept-policy `"$($_)`"" }) -join ''
 $openClawAgentArgs = ($openClawAgents | ForEach-Object { " --openclaw-agent `"$($_)`"" }) -join ''
-$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --heyarp-home `"$heyarpHome`"$policyArgs$openClawAgentArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
+$openClawRunner = Join-Path $workerSkill 'arp-worker-run-openclaw.js'
+$openClawPath = (& node -e "const runner = require(process.argv[1]); process.stdout.write(runner.resolveOpenClaw());" $openClawRunner).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($openClawPath)) {
+  throw 'Could not resolve a usable OpenClaw executable for the scheduled worker.'
+}
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --heyarp-home `"$heyarpHome`" --openclaw-path `"$openClawPath`"$policyArgs$openClawAgentArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
 
 $preflight = Join-Path $workerSkill 'arp-worker-preflight.js'
-$preflightArgs = @($preflight, '--heyarp-home', $heyarpHome, '--from-did', $fromDid)
+$preflightArgs = @($preflight, '--heyarp-home', $heyarpHome, '--from-did', $fromDid, '--openclaw-path', $openClawPath)
 foreach ($policy in $acceptPolicies) {
   $preflightArgs += @('--accept-policy', $policy)
 }
@@ -327,7 +332,7 @@ Register-ScheduledTask `
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
 `RunLevel Limited` is intentional for Windows PowerShell 5.1; `LeastPrivilege` is not a valid ScheduledTasks enum value on this system.
 
-The same fail-closed preflight runs twice: once before Task Scheduler registration and again whenever the SSE daemon starts. It verifies that the pinned `HEYARP_HOME` contains the intended worker DID, every accepted asset maps to an active network, each `rpc.<network>` is explicitly saved and responds from the expected chain, the Solana escrow program is discoverable, and each accepted EVM rail has a saved contract matching the server. If it fails, the daemon logs `startup blocked` and exits before opening the inbox stream or accepting work.
+The same fail-closed preflight runs twice: once before Task Scheduler registration and again whenever the SSE daemon starts. It verifies the pinned OpenClaw executable, confirms that the pinned `HEYARP_HOME` contains the intended worker DID, maps every accepted asset to an active network, checks that each `rpc.<network>` is explicitly saved and responds from the expected chain, confirms that the Solana escrow program is discoverable, and requires each accepted EVM rail to have a saved contract matching the server. If it fails, the daemon logs `startup blocked` and exits before opening the inbox stream or accepting work.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID and run it while that worker's `HEYARP_HOME` is selected. The scheduled action pins the resolved home with `--heyarp-home`; the SSE daemon forwards it to the watchdog and OpenClaw delegation runner, which export it to every child process. DID-derived OpenClaw agent names prevent collisions. Do not share a HeyARP home, OpenClaw worker-agent workspace, `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
@@ -376,6 +381,10 @@ $taskArguments = [string]$task.Actions[0].Arguments
 $pinnedHomeArgument = "--heyarp-home `"$heyarpHome`""
 if (-not $taskArguments.Contains($pinnedHomeArgument)) {
   throw "Scheduled task does not pin the expected HEYARP_HOME: $heyarpHome"
+}
+$pinnedOpenClawArgument = "--openclaw-path `"$openClawPath`""
+if (-not $taskArguments.Contains($pinnedOpenClawArgument)) {
+  throw "Scheduled task does not pin the expected OpenClaw executable: $openClawPath"
 }
 
 $previousHeyarpHome = $env:HEYARP_HOME
