@@ -10,6 +10,7 @@ const {
 const solanaAsset = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/slip44:501';
 const evmAsset = 'eip155:4663/slip44:60';
 const workerDid = 'did:arp:worker-one';
+const hermesPath = 'C:\\Tools\\hermes.cmd';
 
 function fixtures() {
   return {
@@ -75,13 +76,19 @@ test('preflight validates accepted Solana and EVM rails', async () => {
     const result = await preflight({
       'heyarp-home': 'C:\\worker-home',
       'from-did': workerDid,
+      'hermes-path': hermesPath,
       'accept-policy': [`${solanaAsset},0.05`, `${evmAsset},0.005`],
     }, {
+      resolveHermes: (options) => {
+        assert.equal(options.explicitPath, hermesPath);
+        return hermesPath;
+      },
       runHeyarpJson: mockHeyarpJson(data),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
     });
     assert.equal(result.did, workerDid);
+    assert.equal(result.hermesPath, hermesPath);
     assert.deepEqual(result.networks, ['solana-mainnet', 'robinhood-mainnet']);
   } finally {
     if (previous === undefined) delete process.env.HEYARP_HOME;
@@ -96,6 +103,7 @@ test('preflight rejects a missing pinned HEYARP_HOME', async () => {
       'from-did': workerDid,
       'accept-policy': `${solanaAsset},0.05`,
     }, {
+      resolveHermes: () => hermesPath,
       runHeyarpJson: mockHeyarpJson(data),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
@@ -111,6 +119,7 @@ test('preflight rejects a missing intended worker DID', async () => {
       'heyarp-home': 'C:\\worker-home',
       'accept-policy': `${solanaAsset},0.05`,
     }, {
+      resolveHermes: () => hermesPath,
       runHeyarpJson: mockHeyarpJson(data),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
@@ -127,6 +136,7 @@ test('preflight rejects a home belonging to a different agent', async () => {
       'from-did': workerDid,
       'accept-policy': `${solanaAsset},0.05`,
     }, {
+      resolveHermes: () => hermesPath,
       runHeyarpJson: mockHeyarpJson(data, 'did:arp:buyer-one'),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
@@ -144,6 +154,7 @@ test('preflight fails before startup when an accepted RPC is not saved', async (
       'from-did': workerDid,
       'accept-policy': `${solanaAsset},0.05`,
     }, {
+      resolveHermes: () => hermesPath,
       runHeyarpJson: mockHeyarpJson(data),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
@@ -161,10 +172,26 @@ test('preflight rejects an EVM contract that differs from the server', async () 
       'from-did': workerDid,
       'accept-policy': `${evmAsset},0.005`,
     }, {
+      resolveHermes: () => hermesPath,
       runHeyarpJson: mockHeyarpJson(data),
       runHeyarp: (args) => data.config[args[2]] || '(not set)',
       fetch: mockFetch,
     }),
     /does not match the server escrow contract/,
+  );
+});
+
+test('preflight rejects a missing or unusable Hermes CLI', async () => {
+  await assert.rejects(
+    preflight({
+      'heyarp-home': 'C:\\worker-home',
+      'from-did': workerDid,
+      'accept-policy': `${solanaAsset},0.05`,
+    }, {
+      resolveHermes: () => {
+        throw new Error('hermes executable not found');
+      },
+    }),
+    /hermes executable not found/,
   );
 });

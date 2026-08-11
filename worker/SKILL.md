@@ -237,10 +237,15 @@ if (-not $acceptPolicies -or $acceptPolicies.Count -lt 1 -or -not $maxJobs) {
   throw 'Run the Required accept policy block in this PowerShell session before registering the monitor.'
 }
 $policyArgs = ($acceptPolicies | ForEach-Object { " --accept-policy `"$($_)`"" }) -join ''
-$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --heyarp-home `"$heyarpHome`"$policyArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
+$hermesRunner = Join-Path $workerSkill 'arp-worker-run-hermes.js'
+$hermesPath = (& node -e "const runner = require(process.argv[1]); process.stdout.write(runner.resolveHermes());" $hermesRunner).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($hermesPath)) {
+  throw 'Could not resolve a usable Hermes executable for the scheduled worker.'
+}
+$monitorArgs = "`"$hiddenLauncher`" --workspace `"$workspace`" --state-root `"$stateRoot`" --from-did `"$fromDid`" --heyarp-home `"$heyarpHome`" --hermes-path `"$hermesPath`"$policyArgs --max-jobs `"$maxJobs`" --max-runtime-minutes `"$maxRuntimeMinutes`" --reconcile-seconds 30 --active-poll-seconds 2 --active-window-seconds 120"
 
 $preflight = Join-Path $workerSkill 'arp-worker-preflight.js'
-$preflightArgs = @($preflight, '--heyarp-home', $heyarpHome, '--from-did', $fromDid)
+$preflightArgs = @($preflight, '--heyarp-home', $heyarpHome, '--from-did', $fromDid, '--hermes-path', $hermesPath)
 foreach ($policy in $acceptPolicies) {
   $preflightArgs += @('--accept-policy', $policy)
 }
@@ -284,7 +289,7 @@ Register-ScheduledTask `
 `wscript.exe` is intentional. Directly scheduling `node.exe` can flash a console window. The hidden launcher keeps the SSE daemon in the background.
 `RunLevel Limited` is intentional for Windows PowerShell 5.1; `LeastPrivilege` is not a valid ScheduledTasks enum value on this system.
 
-The same fail-closed preflight runs twice: once before Task Scheduler registration and again whenever the SSE daemon starts. It verifies that the pinned `HEYARP_HOME` contains the intended worker DID, every accepted asset maps to an active network, each `rpc.<network>` is explicitly saved and responds from the expected chain, the Solana escrow program is discoverable, and each accepted EVM rail has a saved contract matching the server. If it fails, the daemon logs `startup blocked` and exits before opening the inbox stream or accepting work.
+The same fail-closed preflight runs twice: once before Task Scheduler registration and again whenever the SSE daemon starts. It verifies the pinned Hermes executable, confirms that the pinned `HEYARP_HOME` contains the intended worker DID, maps every accepted asset to an active network, checks that each `rpc.<network>` is explicitly saved and responds from the expected chain, confirms that the Solana escrow program is discoverable, and requires each accepted EVM rail to have a saved contract matching the server. If it fails, the daemon logs `startup blocked` and exits before opening the inbox stream or accepting work.
 
 For multiple worker agents on the same Windows account, repeat the registration block once per worker DID and run it while that worker's `HEYARP_HOME` is selected. The scheduled action pins the resolved home with `--heyarp-home`; the SSE daemon forwards it to the watchdog and delegation runner, which export it to every child process. Do not share a HeyARP home, `seen.txt`, `dispatched.txt`, locks, or logs between separate worker DIDs.
 
@@ -331,6 +336,10 @@ $taskArguments = [string]$task.Actions[0].Arguments
 $pinnedHomeArgument = "--heyarp-home `"$heyarpHome`""
 if (-not $taskArguments.Contains($pinnedHomeArgument)) {
   throw "Scheduled task does not pin the expected HEYARP_HOME: $heyarpHome"
+}
+$pinnedHermesArgument = "--hermes-path `"$hermesPath`""
+if (-not $taskArguments.Contains($pinnedHermesArgument)) {
+  throw "Scheduled task does not pin the expected Hermes executable: $hermesPath"
 }
 
 $previousHeyarpHome = $env:HEYARP_HOME
