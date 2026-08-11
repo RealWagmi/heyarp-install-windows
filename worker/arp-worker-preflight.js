@@ -3,6 +3,7 @@
 
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { resolveCodex } = require('./arp-worker-run-codex');
 
 function parseArgs(argv) {
   const out = {};
@@ -162,6 +163,8 @@ async function preflight(args, deps = {}) {
   if (fromDid === undefined || fromDid === true || !String(fromDid).startsWith('did:arp:')) {
     throw new Error('--from-did with the intended worker DID is required');
   }
+  const findCodex = deps.resolveCodex || resolveCodex;
+  const codexPath = findCodex({ explicitPath: args['codex-path'] });
   const getJson = deps.runHeyarpJson || runHeyarpJson;
   const getText = deps.runHeyarp || runHeyarp;
   const localAgent = getJson(['whoami', '--local', '--json', '--from-did', String(fromDid)]);
@@ -190,6 +193,7 @@ async function preflight(args, deps = {}) {
 
   return {
     heyarpHome,
+    codexPath,
     did: localAgent.did,
     networks: rows.map((row) => row.network),
   };
@@ -198,7 +202,7 @@ async function preflight(args, deps = {}) {
 if (require.main === module) {
   preflight(parseArgs(process.argv.slice(2)))
     .then((result) => {
-      process.stdout.write(`worker preflight passed did=${result.did} networks=${result.networks.join(',')} heyarpHome=${result.heyarpHome}\n`);
+      process.stdout.write(`worker preflight passed did=${result.did} networks=${result.networks.join(',')} heyarpHome=${result.heyarpHome} codex=${result.codexPath}\n`);
     })
     .catch((error) => {
       process.stderr.write(`worker preflight failed: ${error.message}\n`);

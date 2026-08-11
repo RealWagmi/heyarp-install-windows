@@ -64,7 +64,7 @@ function getStateRoot(args) {
   return args['state-root'] || path.join(home, '.heyarp-worker');
 }
 
-function runStartupPreflight(args) {
+function runStartupPreflight(args, deps = {}) {
   const preflight = path.join(__dirname, 'arp-worker-preflight.js');
   if (!fs.existsSync(preflight)) throw new Error(`worker preflight script missing at ${preflight}`);
   const preflightArgs = [
@@ -72,11 +72,13 @@ function runStartupPreflight(args) {
     '--heyarp-home', args['heyarp-home'],
     '--from-did', args['from-did'],
   ];
+  if (args['codex-path']) preflightArgs.push('--codex-path', args['codex-path']);
   const acceptPolicies = args['accept-policy'] === undefined
     ? []
     : (Array.isArray(args['accept-policy']) ? args['accept-policy'] : [args['accept-policy']]);
   for (const policy of acceptPolicies) preflightArgs.push('--accept-policy', policy);
-  const result = spawnSync(process.execPath, preflightArgs, {
+  const runSync = deps.spawnSync || spawnSync;
+  const result = runSync(process.execPath, preflightArgs, {
     cwd: args.workspace ? path.resolve(args.workspace) : process.cwd(),
     env: process.env,
     encoding: 'utf8',
